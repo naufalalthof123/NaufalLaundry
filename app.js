@@ -60,10 +60,13 @@ function esc(s) {
 }
 
 function nextNotaNumber() {
-  let counter = parseInt(localStorage.getItem(STORAGE_KEYS.NOTA_COUNTER) || '2652', 10);
+  let counter = parseInt(localStorage.getItem(STORAGE_KEYS.NOTA_COUNTER) || '2999', 10);
   counter += 1;
   localStorage.setItem(STORAGE_KEYS.NOTA_COUNTER, String(counter));
   return counter;
+}
+function formatNota(counter) {
+  return `NL${counter}`;
 }
 
 // ---------- STATE ----------
@@ -88,6 +91,7 @@ const state = {
 const TABS = [
   { id: 'kasir', label: 'Kasir', ic: '🧺' },
   { id: 'status', label: 'Status', ic: '📦' },
+  { id: 'riwayat', label: 'Riwayat', ic: '📜' },
   { id: 'pelanggan', label: 'Pelanggan', ic: '👥' },
   { id: 'pengeluaran', label: 'Pengeluaran', ic: '💸' },
   { id: 'laporan', label: 'Laporan', ic: '📊' },
@@ -126,6 +130,7 @@ const app = {
     main.innerHTML = '';
     if (state.activeTab === 'kasir') this.renderKasirTab(main);
     else if (state.activeTab === 'status') this.renderStatusTab(main);
+    else if (state.activeTab === 'riwayat') this.renderRiwayatTab(main);
     else if (state.activeTab === 'pelanggan') this.renderPelangganTab(main);
     else if (state.activeTab === 'pengeluaran') this.renderPengeluaranTab(main);
     else if (state.activeTab === 'laporan') this.renderLaporanTab(main);
@@ -181,6 +186,11 @@ const app = {
   renderKasirTab(main) {
     const cartTotal = this.calcCartTotal();
     main.innerHTML = `
+      ${state.editingTransaksiId ? `
+      <div class="card" style="background:#fdf2e9;border-color:var(--warn);display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:12.5px;color:var(--warn);font-weight:700;">✏️ Mode Edit Transaksi</div>
+        <button class="btn btn-outline btn-sm" onclick="app.batalEditTransaksi()">Batal Edit</button>
+      </div>` : ''}
       <div class="card">
         <h2>Pilih Layanan</h2>
         <div class="kategori-grid">
@@ -278,7 +288,7 @@ const app = {
           </span>
           <span class="total-amount">${fmtRupiah(cartTotal.grandTotal)}</span>
         </div>
-        <button class="btn btn-gold btn-block" onclick="app.simpanTransaksi()">✓ Simpan Transaksi & Cetak Struk</button>
+        <button class="btn btn-gold btn-block" onclick="app.simpanTransaksi()">${state.editingTransaksiId ? '✓ Update Transaksi' : '✓ Simpan Transaksi & Cetak Struk'}</button>
       </div>
       ` : ''}
     `;
@@ -475,16 +485,20 @@ const app = {
     const list = loadJSON(STORAGE_KEYS.PELANGGAN, []);
     const matches = list.filter(p => p.nama.toLowerCase().includes(val.toLowerCase())).slice(0, 5);
     if (matches.length === 0) { box.innerHTML = ''; return; }
-    box.innerHTML = `<div class="autocomplete-list">${matches.map(p => `
-      <div class="autocomplete-item" onclick="app.pickPelanggan('${esc(p.nama)}','${esc(p.alamat||'')}','${esc(p.telp||'')}')">
-        <strong>${esc(p.nama)}</strong>${p.alamat ? ' — ' + esc(p.alamat) : ''}
+    this._autocompleteMatches = matches;
+    box.innerHTML = `<div class="autocomplete-list">${matches.map((p, i) => `
+      <div class="autocomplete-item" onclick="app.pickPelanggan(${i})">
+        <div style="font-weight:700;">${esc(p.nama)}</div>
+        <div style="font-size:11px;color:#888;margin-top:1px;">${p.alamat ? '📍 ' + esc(p.alamat) : 'Alamat belum ada'}${p.telp ? ' · 📞 ' + esc(p.telp) : ''}</div>
       </div>`).join('')}</div>`;
   },
 
-  pickPelanggan(nama, alamat, telp) {
-    state.pelangganNama = nama;
-    state.pelangganAlamat = alamat;
-    state.pelangganTelp = telp;
+  pickPelanggan(idx) {
+    const p = this._autocompleteMatches[idx];
+    if (!p) return;
+    state.pelangganNama = p.nama;
+    state.pelangganAlamat = p.alamat || '';
+    state.pelangganTelp = p.telp || '';
     document.getElementById('pelangganAutocomplete').innerHTML = '';
     this.renderTab();
   },
@@ -518,44 +532,67 @@ const app = {
     if (!state.pelangganNama.trim()) { toast('Isi nama pelanggan dulu'); return; }
     if (state.statusBayar === 'Lunas' && !state.metodeBayar) { toast('Pilih metode bayar'); return; }
 
-    const ts = nowTs();
-    const jamSelesai = this.maxWaktuJam();
-    const estSelesaiTs = ts + jamSelesai * 3600 * 1000;
     const { subtotal, ongkir, grandTotal } = this.calcCartTotal();
-    const notaNum = nextNotaNumber();
+    const isEdit = !!state.editingTransaksiId;
 
-    const trx = {
-      id: uid('trx'),
-      nota: `TRX/${notaNum}`,
-      tglMasuk: ts,
-      estSelesai: estSelesaiTs,
-      kasir: state.currentKasir,
-      pelanggan: { nama: state.pelangganNama.trim(), alamat: state.pelangganAlamat.trim(), telp: state.pelangganTelp.trim() },
-      items: JSON.parse(JSON.stringify(state.cart)),
-      parfum: state.parfum,
-      catatan: state.catatanRincian,
-      diskonNominal: state.diskonNominal || 0,
-      diskonPersen: state.diskonPersen || 0,
-      ongkir,
-      subtotal,
-      total: grandTotal,
-      statusBayar: state.statusBayar,
-      metodeBayar: state.metodeBayar,
-      statusPesanan: 'Diproses',
-      tglDiambil: null,
-    };
-
+    let trx;
     const list = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
-    list.push(trx);
-    saveJSON(STORAGE_KEYS.TRANSAKSI, list);
 
-    // simpan pelanggan
-    this.upsertPelanggan(trx.pelanggan);
+    if (isEdit) {
+      trx = list.find(x => x.id === state.editingTransaksiId);
+      if (!trx) { toast('Transaksi tidak ditemukan'); state.editingTransaksiId = null; return; }
+      const jamSelesai = this.maxWaktuJam();
+      trx.estSelesai = trx.tglMasuk + jamSelesai * 3600 * 1000;
+      trx.pelanggan = { nama: state.pelangganNama.trim(), alamat: state.pelangganAlamat.trim(), telp: state.pelangganTelp.trim() };
+      trx.items = JSON.parse(JSON.stringify(state.cart));
+      trx.parfum = state.parfum;
+      trx.catatan = state.catatanRincian;
+      trx.diskonNominal = state.diskonNominal || 0;
+      trx.diskonPersen = state.diskonPersen || 0;
+      trx.ongkir = ongkir;
+      trx.subtotal = subtotal;
+      trx.total = grandTotal;
+      trx.statusBayar = state.statusBayar;
+      trx.metodeBayar = state.metodeBayar;
+      trx.kasir = state.currentKasir;
+      saveJSON(STORAGE_KEYS.TRANSAKSI, list);
+      this.upsertPelanggan(trx.pelanggan);
+      toast(`Transaksi ${trx.nota} diperbarui`);
+      this.showStruk(trx);
+    } else {
+      const ts = nowTs();
+      const jamSelesai = this.maxWaktuJam();
+      const estSelesaiTs = ts + jamSelesai * 3600 * 1000;
+      const notaNum = nextNotaNumber();
 
-    // tampilkan struk
-    this.showStruk(trx);
+      trx = {
+        id: uid('trx'),
+        nota: formatNota(notaNum),
+        tglMasuk: ts,
+        estSelesai: estSelesaiTs,
+        kasir: state.currentKasir,
+        pelanggan: { nama: state.pelangganNama.trim(), alamat: state.pelangganAlamat.trim(), telp: state.pelangganTelp.trim() },
+        items: JSON.parse(JSON.stringify(state.cart)),
+        parfum: state.parfum,
+        catatan: state.catatanRincian,
+        diskonNominal: state.diskonNominal || 0,
+        diskonPersen: state.diskonPersen || 0,
+        ongkir,
+        subtotal,
+        total: grandTotal,
+        statusBayar: state.statusBayar,
+        metodeBayar: state.metodeBayar,
+        statusPesanan: 'Diproses',
+        tglDiambil: null,
+      };
+      list.push(trx);
+      saveJSON(STORAGE_KEYS.TRANSAKSI, list);
+      this.upsertPelanggan(trx.pelanggan);
+      this.showStruk(trx);
+    }
 
-    // reset form (kasir tetap kepilih)
+    // reset form
+    state.editingTransaksiId = null;
     state.cart = [];
     state.pelangganNama = '';
     state.pelangganAlamat = '';
@@ -792,7 +829,7 @@ const app = {
     const trx = this.findTrx(trxId);
     const canvas = await this.drawStrukCanvas(trx);
     const link = document.createElement('a');
-    link.download = `Struk_${trx.nota.replace('/','-')}.png`;
+    link.download = `Struk_${trx.nota}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
     toast('Struk tersimpan');
@@ -813,7 +850,7 @@ const app = {
           <body style="margin:0;background:#111;display:flex;flex-direction:column;align-items:center;padding:20px;font-family:sans-serif;">
             <p style="color:#fff;">Simpan gambar ini, lalu kirim manual via WhatsApp.</p>
             <img src="${url}" style="max-width:100%;border-radius:8px;">
-            <a href="${url}" download="Struk_${trx.nota.replace('/','-')}.png" style="margin-top:12px;padding:12px 20px;background:#25D366;color:#fff;text-decoration:none;border-radius:8px;">Download Gambar</a>
+            <a href="${url}" download="Struk_${trx.nota}.png" style="margin-top:12px;padding:12px 20px;background:#25D366;color:#fff;text-decoration:none;border-radius:8px;">Download Gambar</a>
             <a href="${waUrl}" target="_blank" style="margin-top:8px;padding:12px 20px;background:#128C7E;color:#fff;text-decoration:none;border-radius:8px;">Buka WhatsApp</a>
           </body></html>
         `);
@@ -892,6 +929,34 @@ const app = {
     saveJSON(STORAGE_KEYS.TRANSAKSI, list);
     this.renderTab();
     toast(`Status diubah: ${status}`);
+
+    if (status === 'Siap Diambil') {
+      this.offerNotifSiapDiambil(t);
+    }
+  },
+
+  offerNotifSiapDiambil(t) {
+    const html = `
+      <div class="modal-header"><h3>Kabari Pelanggan?</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <p style="font-size:13px;color:#555;">Cucian <strong>${esc(t.nota)}</strong> milik <strong>${esc(t.pelanggan.nama)}</strong> sudah siap diambil. Kirim kabar via WhatsApp?</p>
+      ${!t.pelanggan.telp ? '<p style="font-size:12px;color:var(--danger);">⚠️ Nomor telp pelanggan ini belum tersimpan, kamu perlu isi manual nanti di WhatsApp.</p>' : ''}
+      <div class="row" style="margin-top:12px;">
+        <button class="btn btn-outline" onclick="app.closeModal()">Nanti Saja</button>
+        <button class="btn btn-gold" onclick="app.kirimNotifSiapDiambil('${t.id}')">📱 Kirim WA</button>
+      </div>
+    `;
+    this.openModal(html);
+  },
+
+  kirimNotifSiapDiambil(trxId) {
+    const t = this.findTrx(trxId);
+    if (!t) return;
+    const pesan = `Halo ${t.pelanggan.nama}, cucian Anda di Naufal Laundry (${t.nota}) sudah *siap diambil*.\n\nTotal: ${fmtRupiah(t.total)}\nStatus Bayar: ${t.statusBayar}\n\nDitunggu ya kedatangannya di Jl. Ahmad No. 9, Pamoyanan, Cicendo, Bandung. Terima kasih! 🙏`;
+    const telp = (t.pelanggan.telp || '').replace(/\D/g, '');
+    const waNumber = telp ? (telp.startsWith('0') ? '62' + telp.slice(1) : telp) : '';
+    const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(pesan)}`;
+    window.open(waUrl, '_blank');
+    this.closeModal();
   },
 
   lunaskanTransaksi(id) {
@@ -914,6 +979,100 @@ const app = {
     this.closeModal();
     this.renderTab();
     toast('Ditandai Lunas');
+  },
+
+  // ============================================
+  // TAB: RIWAYAT (semua transaksi + edit)
+  // ============================================
+  renderRiwayatTab(main) {
+    const list = loadJSON(STORAGE_KEYS.TRANSAKSI, []).slice().reverse();
+    const q = (state._riwayatSearch || '').toLowerCase();
+    const filtered = q
+      ? list.filter(t => t.nota.toLowerCase().includes(q) || t.pelanggan.nama.toLowerCase().includes(q))
+      : list;
+
+    main.innerHTML = `
+      <div class="card">
+        <h2>Riwayat Transaksi <span class="badge-count">${list.length}</span></h2>
+        <input type="text" placeholder="Cari no. nota atau nama pelanggan..." value="${esc(state._riwayatSearch||'')}"
+          oninput="state._riwayatSearch=this.value; app.renderTab()">
+      </div>
+      <div class="card">
+        ${filtered.length === 0
+          ? `<div class="empty-state"><span class="ic">📜</span>Belum ada transaksi.</div>`
+          : filtered.slice(0, 50).map(t => this.renderRiwayatRow(t)).join('')
+        }
+        ${filtered.length > 50 ? `<div style="text-align:center;font-size:11px;color:#999;margin-top:8px;">Menampilkan 50 transaksi terbaru dari ${filtered.length}. Gunakan pencarian untuk hasil lebih spesifik.</div>` : ''}
+      </div>
+    `;
+  },
+
+  renderRiwayatRow(t) {
+    const statusClass = t.statusPesanan === 'Diproses' ? 'status-diproses' : t.statusPesanan === 'Siap Diambil' ? 'status-siap' : 'status-diambil';
+    const bayarClass = t.statusBayar === 'Lunas' ? 'bayar-lunas' : 'bayar-belum';
+    return `
+      <div class="transaksi-row">
+        <div class="transaksi-row-top">
+          <div>
+            <div class="transaksi-nota">${esc(t.nota)} · ${esc(t.pelanggan.nama)}</div>
+            <div class="transaksi-meta">Masuk ${fmtTgl(t.tglMasuk)} · Kasir ${esc(t.kasir)}</div>
+          </div>
+          <div class="transaksi-total">${fmtRupiah(t.total)}</div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px;align-items:center;flex-wrap:wrap;">
+          <span class="status-badge ${statusClass}">${esc(t.statusPesanan)}</span>
+          <span class="status-badge ${bayarClass}">${esc(t.statusBayar)}</span>
+          <div style="margin-left:auto;display:flex;gap:6px;">
+            <button class="btn btn-outline btn-sm" onclick="app.lihatStrukLama('${t.id}')">Lihat Struk</button>
+            <button class="btn btn-outline btn-sm" onclick="app.openEditTransaksi('${t.id}')">Edit</button>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  lihatStrukLama(trxId) {
+    const t = this.findTrx(trxId);
+    if (!t) return;
+    this.showStruk(t);
+  },
+
+  openEditTransaksi(trxId) {
+    const t = this.findTrx(trxId);
+    if (!t) return;
+    // Load transaksi ke state kasir untuk diedit
+    state.editingTransaksiId = t.id;
+    state.cart = JSON.parse(JSON.stringify(t.items));
+    state.pelangganNama = t.pelanggan.nama;
+    state.pelangganAlamat = t.pelanggan.alamat || '';
+    state.pelangganTelp = t.pelanggan.telp || '';
+    state.parfum = t.parfum;
+    state.metodeBayar = t.metodeBayar;
+    state.statusBayar = t.statusBayar;
+    state.catatanRincian = t.catatan || '';
+    state.diskonNominal = t.diskonNominal || 0;
+    state.diskonPersen = t.diskonPersen || 0;
+    state.ongkirJauh = (t.ongkir || 0) > 0;
+    state.activeTab = 'kasir';
+    this.renderTabs();
+    this.renderTab();
+    toast(`Mengedit transaksi ${t.nota}`);
+  },
+
+  batalEditTransaksi() {
+    state.editingTransaksiId = null;
+    state.cart = [];
+    state.pelangganNama = '';
+    state.pelangganAlamat = '';
+    state.pelangganTelp = '';
+    state.parfum = 'Royal';
+    state.metodeBayar = null;
+    state.statusBayar = 'Belum Bayar';
+    state.catatanRincian = '';
+    state.diskonNominal = 0;
+    state.diskonPersen = 0;
+    state.ongkirJauh = false;
+    this.renderTab();
   },
 
   // ============================================
@@ -1047,13 +1206,77 @@ const app = {
                   <div class="transaksi-nota">${esc(p.jenis)}</div>
                   <div class="transaksi-meta">${fmtTglSingkat(p.tanggal)} · ${esc(p.bukti)}${p.keterangan ? ' · ' + esc(p.keterangan) : ''}</div>
                 </div>
-                <div class="transaksi-total">${fmtRupiah(p.jumlah)}</div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <div class="transaksi-total">${fmtRupiah(p.jumlah)}</div>
+                  <button class="btn btn-outline btn-sm" onclick="app.editPengeluaran('${p.id}')">Edit</button>
+                </div>
               </div>
             </div>
           `).join('')
         }
       </div>
     `;
+  },
+
+  editPengeluaran(id) {
+    const list = loadJSON(STORAGE_KEYS.PENGELUARAN, []);
+    const p = list.find(x => x.id === id);
+    if (!p) return;
+    const html = `
+      <div class="modal-header"><h3>Edit Pengeluaran</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <label>Jenis Pengeluaran</label>
+      <div class="chip-group" id="editPengJenisGroup">
+        ${this.JENIS_PENGELUARAN.map(j => `<div class="chip ${p.jenis===j?'selected':''}" data-val="${esc(j)}" onclick="app.selectChipInModal('editPengJenisGroup', this)">${j}</div>`).join('')}
+      </div>
+      <label>Jumlah Biaya (Rp)</label>
+      <input type="number" id="editPengJumlah" value="${p.jumlah}">
+      <label>Bukti</label>
+      <div class="chip-group" id="editPengBuktiGroup">
+        ${['Bon','Kwitansi','Nota'].map(b => `<div class="chip ${p.bukti===b?'selected':''}" data-val="${esc(b)}" onclick="app.selectChipInModal('editPengBuktiGroup', this)">${b}</div>`).join('')}
+      </div>
+      <label>Keterangan</label>
+      <input type="text" id="editPengKet" value="${esc(p.keterangan||'')}">
+      <div class="row" style="margin-top:14px;">
+        <button class="btn btn-danger" onclick="app.deletePengeluaran('${p.id}')">Hapus</button>
+        <button class="btn btn-gold" onclick="app.savePengeluaran('${p.id}')">Simpan</button>
+      </div>
+    `;
+    this.openModal(html);
+  },
+
+  selectChipInModal(groupId, el) {
+    const group = document.getElementById(groupId);
+    group.querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+  },
+
+  savePengeluaran(id) {
+    const list = loadJSON(STORAGE_KEYS.PENGELUARAN, []);
+    const p = list.find(x => x.id === id);
+    if (!p) return;
+    const jenisEl = document.querySelector('#editPengJenisGroup .chip.selected');
+    const buktiEl = document.querySelector('#editPengBuktiGroup .chip.selected');
+    const jumlah = parseFloat(document.getElementById('editPengJumlah').value) || 0;
+    if (!jenisEl) { toast('Pilih jenis pengeluaran'); return; }
+    if (!buktiEl) { toast('Pilih bukti'); return; }
+    if (jumlah <= 0) { toast('Isi jumlah biaya'); return; }
+    p.jenis = jenisEl.dataset.val;
+    p.bukti = buktiEl.dataset.val;
+    p.jumlah = jumlah;
+    p.keterangan = document.getElementById('editPengKet').value.trim();
+    saveJSON(STORAGE_KEYS.PENGELUARAN, list);
+    this.closeModal();
+    this.renderTab();
+    toast('Pengeluaran diperbarui');
+  },
+
+  deletePengeluaran(id) {
+    let list = loadJSON(STORAGE_KEYS.PENGELUARAN, []);
+    list = list.filter(x => x.id !== id);
+    saveJSON(STORAGE_KEYS.PENGELUARAN, list);
+    this.closeModal();
+    this.renderTab();
+    toast('Pengeluaran dihapus');
   },
 
   simpanPengeluaran() {
@@ -1138,7 +1361,6 @@ const app = {
         ${this.renderLaporanTable(masuk, 'masuk')}
         ${this.renderBayarBreakdown(bayarMasuk)}
         <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Pemasukan: ${fmtRupiah(totalMasuk)}</div>
-        <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="app.downloadLaporanHarianImage('masuk','${tglStr}')">💾 Export Gambar</button>
       </div>
 
       <div class="card">
@@ -1146,7 +1368,6 @@ const app = {
         ${this.renderLaporanTable(keluar, 'keluar')}
         ${this.renderBayarBreakdown(bayarKeluar)}
         <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Diambil: ${fmtRupiah(totalKeluar)}</div>
-        <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="app.downloadLaporanHarianImage('keluar','${tglStr}')">💾 Export Gambar</button>
       </div>
 
       <div class="card">
@@ -1166,6 +1387,7 @@ const app = {
           <div style="text-align:center;"><div style="font-size:10px;color:#888;">KELUAR</div><div style="font-weight:800;">${fmtRupiah(totalKeluar)}</div></div>
           <div style="text-align:center;"><div style="font-size:10px;color:#888;">NET</div><div style="font-weight:800;color:${(totalMasuk-totalPengeluaran)>=0?'var(--ok)':'var(--danger)'};">${fmtRupiah(totalMasuk-totalPengeluaran)}</div></div>
         </div>
+        <button class="btn btn-gold btn-block" style="margin-top:12px;" onclick="app.downloadLaporanHarianPDF('${tglStr}')">📄 Export Laporan Harian (PDF)</button>
       </div>
     `;
   },
@@ -1228,51 +1450,48 @@ const app = {
     `;
   },
 
-  downloadLaporanHarianImage(kind, tglStr) {
-    const trxAll = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
-    const rows = kind === 'masuk'
-      ? trxAll.filter(t => fmtTglSingkat(t.tglMasuk) === tglStr)
-      : trxAll.filter(t => t.tglDiambil && fmtTglSingkat(t.tglDiambil) === tglStr);
-    const total = rows.reduce((a,b) => a + b.total, 0);
+  // Helper: gambar 1 section tabel (Masuk/Keluar/Pengeluaran) ke context canvas, mulai dari startY.
+  // Mengembalikan Y akhir setelah section selesai digambar.
+  _drawSectionHeader(ctx, width, y, title, bgColor, textColor) {
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, y, width, 40);
+    ctx.fillStyle = textColor;
+    ctx.font = 'bold 17px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(title, 20, y + 26);
+    return y + 40 + 14;
+  },
 
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    const width = 700;
-    const rowH = 26;
-    const headerH = 90;
-    const height = headerH + (rows.length + 3) * rowH;
-    canvas.width = width * 2; canvas.height = height * 2;
-    canvas.style.width = width+'px'; canvas.style.height = height+'px';
-    ctx.scale(2,2);
-    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,width,height);
-
-    ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(`LAPORAN ${kind.toUpperCase()} LAUNDRY`, width/2, 26);
-    ctx.font = '12px sans-serif';
-    ctx.fillText(`${fmtHari(this.parseInputDate(tglStr))}, ${tglStr} — Naufal Laundry`, width/2, 46);
-
-    let y = headerH;
+  _drawTrxTable(ctx, width, y, rows) {
+    const rowH = 24;
     const cols = [
-      {label:'No', w:30, align:'center'},
-      {label:'Nota', w:80, align:'left'},
+      {label:'No', w:32, align:'center'},
+      {label:'Nota', w:75, align:'left'},
       {label:'Pelanggan', w:150, align:'left'},
-      {label:'Jenis', w:70, align:'center'},
-      {label:'Level', w:100, align:'center'},
-      {label:'Biaya', w:110, align:'right'},
-      {label:'Bayar', w:100, align:'center'},
+      {label:'Jenis', w:65, align:'center'},
+      {label:'Level', w:95, align:'center'},
+      {label:'Biaya', w:105, align:'right'},
+      {label:'Bayar', w:95, align:'center'},
     ];
-    let x = 15;
-    ctx.fillStyle = '#f0ede6'; ctx.fillRect(15, y-18, width-30, 24);
+    let x = 20;
+    ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fillRect(20, y-17, width-40, 23);
     ctx.fillStyle = '#333'; ctx.font = 'bold 11px sans-serif';
     cols.forEach(c => { ctx.textAlign = c.align; ctx.fillText(c.label, c.align==='right' ? x+c.w-4 : c.align==='center' ? x+c.w/2 : x+4, y); x += c.w; });
     y += rowH;
 
+    if (rows.length === 0) {
+      ctx.font = 'italic 12px sans-serif'; ctx.fillStyle = '#888'; ctx.textAlign = 'left';
+      ctx.fillText('Tidak ada transaksi.', 24, y);
+      y += rowH;
+      return y;
+    }
+
     ctx.font = '11px sans-serif';
     rows.forEach((t, i) => {
-      x = 15;
+      x = 20;
       const jenisSet = [...new Set(t.items.map(it => it.jenisCuci))].join('/');
       const levelSet = [...new Set(t.items.map(it => LEVEL_LABEL[it.level]))].join('/');
-      const vals = [String(i+1), t.nota, t.pelanggan.nama, jenisSet, levelSet, fmtRupiah(t.total), t.statusBayar==='Lunas'?'Lunas':'Belum'];
+      const vals = [String(i+1), t.nota, t.pelanggan.nama, jenisSet, levelSet, fmtRupiah(t.total), t.statusBayar==='Lunas'?(t.metodeBayar||'Lunas'):'Belum'];
       ctx.fillStyle = '#222';
       cols.forEach((c, ci) => {
         ctx.textAlign = c.align;
@@ -1285,18 +1504,257 @@ const app = {
         x += c.w;
       });
       y += rowH;
-      ctx.strokeStyle = '#eee'; ctx.beginPath(); ctx.moveTo(15,y-rowH+8); ctx.lineTo(width-15,y-rowH+8); ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.beginPath(); ctx.moveTo(20,y-rowH+8); ctx.lineTo(width-20,y-rowH+8); ctx.stroke();
+    });
+    return y;
+  },
+
+  _drawBayarBreakdown(ctx, width, y, bayar) {
+    const boxW = (width - 40 - 16) / 3;
+    const items = [['TUNAI', bayar.Tunai], ['QRIS', bayar.QRIS], ['TRANSFER', bayar.Transfer]];
+    items.forEach(([label, val], i) => {
+      const bx = 20 + i * (boxW + 8);
+      ctx.fillStyle = 'rgba(0,0,0,0.05)';
+      ctx.fillRect(bx, y, boxW, 40);
+      ctx.fillStyle = '#666'; ctx.font = '9.5px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(label, bx + boxW/2, y + 15);
+      ctx.fillStyle = '#222'; ctx.font = 'bold 12.5px sans-serif';
+      ctx.fillText(fmtRupiah(val), bx + boxW/2, y + 32);
+    });
+    y += 50;
+    if (bayar['Belum Bayar'] > 0) {
+      ctx.fillStyle = '#c0392b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(`Belum Bayar: ${fmtRupiah(bayar['Belum Bayar'])}`, width/2, y);
+      y += 20;
+    }
+    return y;
+  },
+
+  async downloadLaporanHarianPDF(tglStr) {
+    toast('Menyiapkan PDF...');
+    const trxAll = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
+    const pengAll = loadJSON(STORAGE_KEYS.PENGELUARAN, []);
+
+    const masuk = trxAll.filter(t => fmtTglSingkat(t.tglMasuk) === tglStr);
+    const keluar = trxAll.filter(t => t.tglDiambil && fmtTglSingkat(t.tglDiambil) === tglStr);
+    const pengeluaran = pengAll.filter(p => fmtTglSingkat(p.tanggal) === tglStr);
+
+    const totalMasuk = masuk.reduce((a,b) => a + b.total, 0);
+    const totalKeluar = keluar.reduce((a,b) => a + b.total, 0);
+    const totalPengeluaran = pengeluaran.reduce((a,b) => a + b.jumlah, 0);
+
+    const breakdownBayar = (rows) => {
+      const b = { Tunai: 0, QRIS: 0, Transfer: 0, 'Belum Bayar': 0 };
+      rows.forEach(t => {
+        if (t.statusBayar === 'Lunas' && t.metodeBayar) b[t.metodeBayar] += t.total;
+        else b['Belum Bayar'] += t.total;
+      });
+      return b;
+    };
+    const bayarMasuk = breakdownBayar(masuk);
+    const bayarKeluar = breakdownBayar(keluar);
+
+    const width = 780;
+    // Estimasi tinggi total dulu (dry run sederhana): header + 3 section + footer ttd
+    const rowH = 24;
+    const estMasukH = 40+14 + 23+rowH + Math.max(masuk.length,1)*rowH + 50 + 45;
+    const estKeluarH = 40+14 + 23+rowH + Math.max(keluar.length,1)*rowH + 50 + 45;
+    const estPengH = 40+14 + 23+rowH + Math.max(pengeluaran.length,1)*rowH + 45;
+    const headerH = 100;
+    const footerH = 170; // ringkasan + ttd
+    const totalHeight = headerH + estMasukH + estKeluarH + estPengH + footerH + 40;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = width * 2;
+    canvas.height = totalHeight * 2;
+    canvas.style.width = width + 'px';
+    canvas.style.height = totalHeight + 'px';
+    ctx.scale(2, 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, totalHeight);
+
+    // Header
+    let y = 20;
+    const logoImg = await this.getLogoImg();
+    if (logoImg) {
+      const logoW = 90;
+      const logoH = Math.round(logoW * logoImg.height / logoImg.width);
+      ctx.drawImage(logoImg, 20, y, logoW, logoH);
+    }
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('LAPORAN HARIAN', width - 20, y + 24);
+    ctx.font = '13px sans-serif'; ctx.fillStyle = '#666';
+    ctx.fillText(`${fmtHari(this.parseInputDate(tglStr))}, ${tglStr}`, width - 20, y + 44);
+    ctx.fillText('Naufal Laundry', width - 20, y + 60);
+    y = headerH;
+
+    // Section MASUK (hijau muda)
+    y = this._drawSectionHeader(ctx, width, y, '📥  LAPORAN MASUK LAUNDRY', '#dcefdf', '#1e5c33');
+    y = this._drawTrxTable(ctx, width, y, masuk);
+    y += 8;
+    y = this._drawBayarBreakdown(ctx, width, y, bayarMasuk);
+    ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#1e5c33';
+    ctx.fillText(`Jumlah Pemasukan: ${fmtRupiah(totalMasuk)}`, width - 20, y + 6);
+    y += 36;
+
+    // Section KELUAR (biru muda)
+    y = this._drawSectionHeader(ctx, width, y, '📤  LAPORAN KELUAR LAUNDRY', '#dbe9f7', '#1c4f7c');
+    y = this._drawTrxTable(ctx, width, y, keluar);
+    y += 8;
+    y = this._drawBayarBreakdown(ctx, width, y, bayarKeluar);
+    ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#1c4f7c';
+    ctx.fillText(`Jumlah Diambil: ${fmtRupiah(totalKeluar)}`, width - 20, y + 6);
+    y += 36;
+
+    // Section PENGELUARAN (oranye muda)
+    y = this._drawSectionHeader(ctx, width, y, '💸  PENGELUARAN', '#fbe8d6', '#8a4a1e');
+    const rowHP = 24;
+    if (pengeluaran.length === 0) {
+      ctx.font = 'italic 12px sans-serif'; ctx.fillStyle = '#888'; ctx.textAlign = 'left';
+      ctx.fillText('Tidak ada pengeluaran.', 24, y);
+      y += rowHP;
+    } else {
+      const cols = [{label:'Jenis',w:280,align:'left'},{label:'Biaya',w:200,align:'right'},{label:'Bukti',w:200,align:'left'}];
+      let x = 20;
+      ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fillRect(20, y-17, width-40, 23);
+      ctx.fillStyle = '#333'; ctx.font = 'bold 11px sans-serif';
+      cols.forEach(c => { ctx.textAlign = c.align; ctx.fillText(c.label, c.align==='right'?x+c.w-4:x+4, y); x += c.w; });
+      y += rowHP;
+      ctx.font = '11px sans-serif';
+      pengeluaran.forEach(p => {
+        x = 20;
+        const vals = [p.jenis, fmtRupiah(p.jumlah), p.bukti];
+        ctx.fillStyle = '#222';
+        cols.forEach((c, ci) => {
+          ctx.textAlign = c.align;
+          ctx.fillText(vals[ci], c.align==='right'?x+c.w-4:x+4, y);
+          x += c.w;
+        });
+        y += rowHP;
+        ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.beginPath(); ctx.moveTo(20,y-rowHP+8); ctx.lineTo(width-20,y-rowHP+8); ctx.stroke();
+      });
+    }
+    y += 8;
+    ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#8a4a1e';
+    ctx.fillText(`Jumlah Pengeluaran: ${fmtRupiah(totalPengeluaran)}`, width - 20, y + 6);
+    y += 40;
+
+    // Ringkasan
+    ctx.strokeStyle = '#ccc'; ctx.beginPath(); ctx.moveTo(20, y); ctx.lineTo(width-20, y); ctx.stroke();
+    y += 26;
+    ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#1a1a1a';
+    ctx.fillText(`Net (Masuk - Pengeluaran): ${fmtRupiah(totalMasuk - totalPengeluaran)}`, 20, y);
+    y += 40;
+
+    // Tanda tangan
+    ctx.textAlign = 'left'; ctx.font = '12px sans-serif'; ctx.fillStyle = '#444';
+    ctx.fillText('Tanda tangan operator:', 20, y);
+    y += 50;
+    ctx.strokeStyle = '#999'; ctx.beginPath(); ctx.moveTo(20, y); ctx.lineTo(220, y); ctx.stroke();
+    y += 16;
+    ctx.font = '10.5px sans-serif'; ctx.fillStyle = '#888';
+    ctx.fillText(`(${state.currentKasir || '.......................'})`, 20, y);
+
+    // Convert ke PDF
+    const pdfBlob = await this.canvasToPdfBlob(canvas, width, totalHeight);
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(pdfBlob);
+    link.download = `Laporan_Harian_NaufalLaundry_${tglStr.replace(/\//g,'-')}.pdf`;
+    link.click();
+    toast('Laporan PDF tersimpan');
+  },
+
+  // Konversi canvas jadi PDF 1 halaman (embed sebagai JPEG di dalam PDF minimal).
+  // Pendekatan manual tanpa library eksternal supaya tetap 100% offline.
+  canvasToPdfBlob(canvas, widthPt, heightPt) {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const jpegData = new Uint8Array(reader.result);
+          const pdfBytes = this.buildSingleImagePdf(jpegData, widthPt, heightPt, canvas.width, canvas.height);
+          resolve(new Blob([pdfBytes], { type: 'application/pdf' }));
+        };
+        reader.readAsArrayBuffer(blob);
+      }, 'image/jpeg', 0.92);
+    });
+  },
+
+  buildSingleImagePdf(jpegBytes, widthPt, heightPt, pixelWidth, pixelHeight) {
+    return this.buildMultiImagePdf([{ jpegBytes, widthPt, heightPt, pixelWidth, pixelHeight }]);
+  },
+
+  // Bangun PDF multi-halaman, tiap halaman 1 gambar JPEG full-page.
+  // pages: array of { jpegBytes, widthPt, heightPt, pixelWidth, pixelHeight }
+  buildMultiImagePdf(pages) {
+    const enc = new TextEncoder();
+    const chunks = [];
+    const offsets = {};
+    let pos = 0;
+    const push = (data) => {
+      const bytes = typeof data === 'string' ? enc.encode(data) : data;
+      chunks.push(bytes);
+      pos += bytes.length;
+    };
+
+    const n = pages.length;
+    // Object numbering: 1=Catalog, 2=Pages, lalu tiap halaman pakai 3 object (Page, Image, Content)
+    // Page i (0-based): Page = 3+i*3, Image = 4+i*3, Content = 5+i*3
+    const pageObjNums = [];
+    for (let i = 0; i < n; i++) pageObjNums.push(3 + i * 3);
+
+    push('%PDF-1.4\n');
+
+    offsets[1] = pos;
+    push(`1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`);
+
+    offsets[2] = pos;
+    const kids = pageObjNums.map(num => `${num} 0 R`).join(' ');
+    push(`2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${n} >>\nendobj\n`);
+
+    pages.forEach((p, i) => {
+      const pageNum = 3 + i * 3;
+      const imgNum = 4 + i * 3;
+      const contentNum = 5 + i * 3;
+
+      offsets[pageNum] = pos;
+      push(`${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.widthPt} ${p.heightPt}] /Resources << /XObject << /Im0 ${imgNum} 0 R >> >> /Contents ${contentNum} 0 R >>\nendobj\n`);
+
+      offsets[imgNum] = pos;
+      push(`${imgNum} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${p.pixelWidth} /Height ${p.pixelHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.jpegBytes.length} >>\nstream\n`);
+      push(p.jpegBytes);
+      push(`\nendstream\nendobj\n`);
+
+      const content = `q\n${p.widthPt} 0 0 ${p.heightPt} 0 0 cm\n/Im0 Do\nQ`;
+      offsets[contentNum] = pos;
+      push(`${contentNum} 0 obj\n<< /Length ${content.length} >>\nstream\n${content}\nendstream\nendobj\n`);
     });
 
-    y += 10;
-    ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#b8934a';
-    ctx.fillText(`Jumlah: ${fmtRupiah(total)}`, width-15, y);
+    const totalObjs = 2 + n * 3;
+    const xrefStart = pos;
+    push(`xref\n0 ${totalObjs + 1}\n0000000000 65535 f \n`);
+    for (let i = 1; i <= totalObjs; i++) {
+      push(String(offsets[i]).padStart(10, '0') + ' 00000 n \n');
+    }
+    push(`trailer\n<< /Size ${totalObjs + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`);
 
-    const link = document.createElement('a');
-    link.download = `Laporan_${kind}_${tglStr.replace(/\//g,'-')}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-    toast('Laporan tersimpan');
+    const totalLen = chunks.reduce((a, c) => a + c.length, 0);
+    const result = new Uint8Array(totalLen);
+    let off = 0;
+    chunks.forEach(c => { result.set(c, off); off += c.length; });
+    return result;
+  },
+
+  canvasToJpegData(canvas) {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(new Uint8Array(reader.result));
+        reader.readAsArrayBuffer(blob);
+      }, 'image/jpeg', 0.92);
+    });
   },
 
   renderLaporanBulanan(body) {
@@ -1359,7 +1817,276 @@ const app = {
         <p style="font-size:11.5px;color:#888;margin-top:0;">File Excel 3 sheet: Rekap Bulanan, Kinerja Kasir, Data Transaksi Mentah.</p>
         <button class="btn btn-gold btn-block" onclick="app.exportExcelBulanan()">📊 Export ke Excel</button>
       </div>
+      <div class="card">
+        <h2>Laporan Presentasi Bulanan</h2>
+        <p style="font-size:11.5px;color:#888;margin-top:0;">PDF format slide untuk presentasi ke owner/GM: orderan & timbangan masuk/keluar harian, plus perbandingan tahunan.</p>
+        <button class="btn btn-gold btn-block" onclick="app.exportLaporanPresentasiPDF()">🖼️ Export Laporan Presentasi (PDF)</button>
+      </div>
     `;
+  },
+
+  // ============================================
+  // LAPORAN PRESENTASI BULANAN (PDF multi-slide)
+  // ============================================
+  _slideCanvas(w, h) {
+    const canvas = document.createElement('canvas');
+    canvas.width = w * 2;
+    canvas.height = h * 2;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(2, 2);
+    return { canvas, ctx };
+  },
+
+  _drawBarChart(ctx, opts) {
+    const { x, y, w, h, labels, values, barColor, maxVal, valueFmt } = opts;
+    const max = maxVal || Math.max(...values, 1) * 1.15;
+    const n = values.length;
+    const gap = 4;
+    const barW = Math.max(2, (w - gap * (n - 1)) / n);
+    const chartH = h - 30; // ruang buat label di bawah
+
+    // gridlines
+    ctx.strokeStyle = '#e5e5e5'; ctx.fillStyle = '#888'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    const steps = 5;
+    for (let s = 0; s <= steps; s++) {
+      const gy = y + chartH - (chartH * s / steps);
+      ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x + w, gy); ctx.stroke();
+      ctx.fillText(Math.round(max * s / steps).toLocaleString('id-ID'), x - 6, gy + 3);
+    }
+
+    values.forEach((v, i) => {
+      const bh = (v / max) * chartH;
+      const bx = x + i * (barW + gap);
+      const by = y + chartH - bh;
+      ctx.fillStyle = barColor;
+      ctx.fillRect(bx, by, barW, bh);
+      if (barW > 10) {
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(String(v), bx + barW/2, by + 11);
+      }
+      // label tanggal di bawah
+      ctx.save();
+      ctx.translate(bx + barW/2, y + chartH + 12);
+      ctx.rotate(-Math.PI/4);
+      ctx.fillStyle = '#555'; ctx.font = '8.5px sans-serif'; ctx.textAlign = 'right';
+      ctx.fillText(labels[i], 0, 0);
+      ctx.restore();
+    });
+  },
+
+  _drawGroupedBarChart(ctx, opts) {
+    const { x, y, w, h, labels, seriesA, seriesB, colorA, colorB } = opts;
+    const max = Math.max(...seriesA, ...seriesB, 1) * 1.15;
+    const n = labels.length;
+    const groupGap = 10;
+    const groupW = (w - groupGap * (n - 1)) / n;
+    const barW = (groupW - 4) / 2;
+    const chartH = h - 34;
+
+    ctx.strokeStyle = '#e5e5e5'; ctx.fillStyle = '#888'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    const steps = 5;
+    for (let s = 0; s <= steps; s++) {
+      const gy = y + chartH - (chartH * s / steps);
+      ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x + w, gy); ctx.stroke();
+      ctx.fillText(Math.round(max * s / steps).toLocaleString('id-ID'), x - 6, gy + 3);
+    }
+
+    labels.forEach((label, i) => {
+      const gx = x + i * (groupW + groupGap);
+      const vA = seriesA[i] || 0;
+      const vB = seriesB[i] || 0;
+      const bhA = (vA / max) * chartH;
+      const bhB = (vB / max) * chartH;
+      ctx.fillStyle = colorA;
+      ctx.fillRect(gx, y + chartH - bhA, barW, bhA);
+      ctx.fillStyle = colorB;
+      ctx.fillRect(gx + barW + 4, y + chartH - bhB, barW, bhB);
+      if (vA > 0) { ctx.fillStyle = '#fff'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(String(vA), gx + barW/2, y + chartH - bhA + 11); }
+      if (vB > 0) { ctx.fillStyle = '#fff'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(String(vB), gx + barW + 4 + barW/2, y + chartH - bhB + 11); }
+      ctx.fillStyle = '#555'; ctx.font = '9.5px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(label, gx + groupW/2, y + chartH + 16);
+    });
+  },
+
+  async _drawSlideHeader(ctx, width, title) {
+    ctx.fillStyle = '#f5f1e8';
+    ctx.fillRect(0, 0, width, 90);
+    const logoImg = await this.getLogoImg();
+    if (logoImg) {
+      const logoH = 50;
+      const logoW = Math.round(logoH * logoImg.width / logoImg.height);
+      ctx.drawImage(logoImg, 24, 20, logoW, logoH);
+    }
+    ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(title, width - 24, 52);
+    ctx.strokeStyle = '#b8934a'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(0, 90); ctx.lineTo(width, 90); ctx.stroke();
+  },
+
+  async exportLaporanPresentasiPDF() {
+    toast('Menyiapkan laporan presentasi...');
+    const [y, m] = (state._laporanBulan || '').split('-').map(Number);
+    const trxAll = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
+    const namaBulan = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'][m-1];
+    const daysInMonth = new Date(y, m, 0).getDate();
+
+    const width = 900, height = 560;
+    const pages = [];
+
+    // --- Slide 1: Cover ---
+    {
+      const { canvas, ctx } = this._slideCanvas(width, height);
+      ctx.fillStyle = '#f5f1e8'; ctx.fillRect(0, 0, width, height);
+      const logoImg = await this.getLogoImg();
+      if (logoImg) {
+        const logoH = 130;
+        const logoW = Math.round(logoH * logoImg.width / logoImg.height);
+        ctx.drawImage(logoImg, width/2 - logoW/2, 110, logoW, logoH);
+      }
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 40px sans-serif';
+      ctx.fillText('LAPORAN', width/2, 300);
+      ctx.fillText('NAUFAL LAUNDRY', width/2, 350);
+      ctx.fillStyle = '#b8934a'; ctx.font = 'bold 24px sans-serif';
+      ctx.fillText(`${namaBulan.toUpperCase()} ${y}`, width/2, 400);
+      pages.push(canvas);
+    }
+
+    const buildDailySlide = async (title, subtitleFn, dataFn, barColor) => {
+      const { canvas, ctx } = this._slideCanvas(width, height);
+      ctx.fillStyle = '#fdfaf3'; ctx.fillRect(0, 0, width, height);
+      await this._drawSlideHeader(ctx, width, title);
+
+      const labels = [], values = [];
+      let total = 0;
+      for (let d = 1; d <= daysInMonth; d++) {
+        const v = dataFn(d);
+        labels.push(String(d).padStart(2,'0'));
+        values.push(v);
+        total += v;
+      }
+      const avg = Math.round(total / daysInMonth);
+
+      ctx.fillStyle = '#3d6b47'; ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(subtitleFn(total, avg), width/2, 120);
+
+      this._drawBarChart(ctx, {
+        x: 60, y: 145, w: width - 110, h: height - 200,
+        labels, values, barColor, maxVal: null,
+      });
+      return canvas;
+    };
+
+    // --- Slide 2: Jumlah Orderan Masuk ---
+    pages.push(await buildDailySlide(
+      'JUMLAH ORDERAN MASUK',
+      (total, avg) => `Jumlah pelanggan masuk: ${total} Order  ·  Rata-rata: ${avg} Order/hari`,
+      (d) => trxAll.filter(t => { const dt = new Date(t.tglMasuk); return dt.getFullYear()===y && dt.getMonth()+1===m && dt.getDate()===d; }).length,
+      '#5b8c5e'
+    ));
+
+    // --- Slide 3: Jumlah Timbangan Masuk ---
+    pages.push(await buildDailySlide(
+      'JUMLAH TIMBANGAN MASUK',
+      (total, avg) => `Jumlah timbangan masuk: ${total.toLocaleString('id-ID')} kg  ·  Rata-rata: ${avg} kg/hari`,
+      (d) => {
+        const trxHari = trxAll.filter(t => { const dt = new Date(t.tglMasuk); return dt.getFullYear()===y && dt.getMonth()+1===m && dt.getDate()===d; });
+        let kg = 0;
+        trxHari.forEach(t => t.items.forEach(it => { if (it.satuan === 'KG') kg += it.qty; }));
+        return Math.round(kg);
+      },
+      '#5b8c5e'
+    ));
+
+    // --- Slide 4: Jumlah Orderan Keluar ---
+    pages.push(await buildDailySlide(
+      'JUMLAH ORDERAN KELUAR',
+      (total, avg) => `Jumlah pelanggan keluar: ${total} Order  ·  Rata-rata: ${avg} Order/hari`,
+      (d) => trxAll.filter(t => { if (!t.tglDiambil) return false; const dt = new Date(t.tglDiambil); return dt.getFullYear()===y && dt.getMonth()+1===m && dt.getDate()===d; }).length,
+      '#4a7ba6'
+    ));
+
+    // --- Slide 5: Jumlah Timbangan Keluar ---
+    pages.push(await buildDailySlide(
+      'JUMLAH TIMBANGAN KELUAR',
+      (total, avg) => `Jumlah timbangan keluar: ${total.toLocaleString('id-ID')} kg  ·  Rata-rata: ${avg} kg/hari`,
+      (d) => {
+        const trxHari = trxAll.filter(t => { if (!t.tglDiambil) return false; const dt = new Date(t.tglDiambil); return dt.getFullYear()===y && dt.getMonth()+1===m && dt.getDate()===d; });
+        let kg = 0;
+        trxHari.forEach(t => t.items.forEach(it => { if (it.satuan === 'KG') kg += it.qty; }));
+        return Math.round(kg);
+      },
+      '#4a7ba6'
+    ));
+
+    // --- Slide 6: Perbandingan Tahunan (Pelanggan & Timbangan, Masuk vs Keluar per bulan) ---
+    {
+      const { canvas, ctx } = this._slideCanvas(width, height);
+      ctx.fillStyle = '#fdfaf3'; ctx.fillRect(0, 0, width, height);
+      await this._drawSlideHeader(ctx, width, `PERBANDINGAN TAHUNAN ${y}`);
+
+      const namaBulanSingkat = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+      const pelangganMasuk = [], pelangganKeluar = [], kgMasuk = [], kgKeluar = [];
+      for (let bulan = 1; bulan <= 12; bulan++) {
+        const masukBulan = trxAll.filter(t => { const dt = new Date(t.tglMasuk); return dt.getFullYear()===y && dt.getMonth()+1===bulan; });
+        const keluarBulan = trxAll.filter(t => { if (!t.tglDiambil) return false; const dt = new Date(t.tglDiambil); return dt.getFullYear()===y && dt.getMonth()+1===bulan; });
+        pelangganMasuk.push(masukBulan.length);
+        pelangganKeluar.push(keluarBulan.length);
+        let kgM = 0, kgK = 0;
+        masukBulan.forEach(t => t.items.forEach(it => { if (it.satuan==='KG') kgM += it.qty; }));
+        keluarBulan.forEach(t => t.items.forEach(it => { if (it.satuan==='KG') kgK += it.qty; }));
+        kgMasuk.push(Math.round(kgM));
+        kgKeluar.push(Math.round(kgK));
+      }
+
+      ctx.fillStyle = '#3d6b47'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('PELANGGAN (Masuk vs Keluar)', 40, 118);
+      this._drawGroupedBarChart(ctx, {
+        x: 60, y: 130, w: width - 110, h: 165,
+        labels: namaBulanSingkat, seriesA: pelangganMasuk, seriesB: pelangganKeluar,
+        colorA: '#5b8c5e', colorB: '#a3c585',
+      });
+
+      ctx.fillStyle = '#3d6b47'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('TIMBANGAN KG (Masuk vs Keluar)', 40, 350);
+      this._drawGroupedBarChart(ctx, {
+        x: 60, y: 362, w: width - 110, h: 165,
+        labels: namaBulanSingkat, seriesA: kgMasuk, seriesB: kgKeluar,
+        colorA: '#4a7ba6', colorB: '#8fb8d9',
+      });
+
+      pages.push(canvas);
+    }
+
+    // --- Slide 7: Penutup ---
+    {
+      const { canvas, ctx } = this._slideCanvas(width, height);
+      ctx.fillStyle = '#f5f1e8'; ctx.fillRect(0, 0, width, height);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#3d6b47'; ctx.font = 'bold 48px sans-serif';
+      ctx.fillText('TERIMA KASIH', width/2, height/2);
+      const logoImg = await this.getLogoImg();
+      if (logoImg) {
+        const logoH = 70;
+        const logoW = Math.round(logoH * logoImg.width / logoImg.height);
+        ctx.drawImage(logoImg, width/2 - logoW/2, height/2 + 40, logoW, logoH);
+      }
+      pages.push(canvas);
+    }
+
+    // Convert semua canvas jadi JPEG dan gabung ke 1 PDF
+    const pdfPages = [];
+    for (const canvas of pages) {
+      const jpegBytes = await this.canvasToJpegData(canvas);
+      pdfPages.push({ jpegBytes, widthPt: width, heightPt: height, pixelWidth: canvas.width, pixelHeight: canvas.height });
+    }
+    const pdfBytes = this.buildMultiImagePdf(pdfPages);
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Laporan_Presentasi_NaufalLaundry_${state._laporanBulan}.pdf`;
+    link.click();
+    toast('Laporan presentasi PDF tersimpan');
   },
 
   renderLaporanKinerja(body) {
