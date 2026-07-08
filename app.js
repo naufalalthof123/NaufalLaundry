@@ -8,13 +8,22 @@ const STORAGE_KEYS = {
   PENGELUARAN: 'nl_pengeluaran',
   KASIR_LIST: 'nl_kasir_list',
   NOTA_COUNTER: 'nl_nota_counter',
-  TIME_OFFSET: 'nl_time_offset', // ms, buat testing override waktu
+  TIME_MODE: 'nl_time_mode', // 'otomatis' atau 'manual'
+  TIME_MANUAL_TS: 'nl_time_manual_ts', // timestamp manual (ms) kalau mode manual
+  TIME_MANUAL_SET_AT: 'nl_time_manual_set_at', // kapan manual ts itu di-set (buat hitung offset berjalan)
 };
 
 // ---------- UTIL ----------
 function nowTs() {
-  const offset = parseInt(localStorage.getItem(STORAGE_KEYS.TIME_OFFSET) || '0', 10);
-  return Date.now() + offset;
+  const mode = localStorage.getItem(STORAGE_KEYS.TIME_MODE) || 'otomatis';
+  if (mode === 'manual') {
+    const manualTs = parseInt(localStorage.getItem(STORAGE_KEYS.TIME_MANUAL_TS) || '0', 10);
+    const setAt = parseInt(localStorage.getItem(STORAGE_KEYS.TIME_MANUAL_SET_AT) || '0', 10);
+    if (manualTs > 0 && setAt > 0) {
+      return manualTs + (Date.now() - setAt);
+    }
+  }
+  return Date.now();
 }
 function fmtRupiah(n) {
   return 'Rp' + Math.round(n).toLocaleString('id-ID');
@@ -107,6 +116,7 @@ const app = {
     if (headerLogo && typeof LOGO_SMALL_B64 !== 'undefined') headerLogo.src = LOGO_SMALL_B64;
     this.renderTabs();
     this.updateKasirBadge();
+    this.updateWaktuBadge();
     this.renderTab();
   },
 
@@ -140,11 +150,84 @@ const app = {
     document.getElementById('kasirBadgeName').textContent = state.currentKasir || 'Pilih Kasir';
   },
 
+  updateWaktuBadge() {
+    const mode = localStorage.getItem(STORAGE_KEYS.TIME_MODE) || 'otomatis';
+    const el = document.getElementById('waktuBadgeText');
+    const badge = document.getElementById('waktuBadge');
+    if (!el) return;
+    if (mode === 'manual') {
+      el.textContent = fmtTgl(nowTs());
+      badge.style.borderColor = 'var(--warn)';
+      badge.style.color = '#f0a868';
+    } else {
+      el.textContent = 'Otomatis';
+      badge.style.borderColor = 'var(--gold)';
+      badge.style.color = 'var(--gold-light)';
+    }
+  },
+
+  openWaktuPicker() {
+    const mode = localStorage.getItem(STORAGE_KEYS.TIME_MODE) || 'otomatis';
+    const current = new Date(nowTs());
+    const pad = (x) => String(x).padStart(2, '0');
+    const dateVal = `${current.getFullYear()}-${pad(current.getMonth()+1)}-${pad(current.getDate())}`;
+    const timeVal = `${pad(current.getHours())}:${pad(current.getMinutes())}`;
+
+    const html = `
+      <div class="modal-header"><h3>Pengaturan Waktu</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <p style="font-size:12px;color:#777;margin-top:0;">Gunakan mode Manual kalau perlu input transaksi untuk tanggal lain (misal transaksi yang lupa dicatat kemarin).</p>
+      <div class="chip-group">
+        <div class="chip ${mode==='otomatis'?'selected':''}" onclick="app.setWaktuMode('otomatis')">🕐 Otomatis (waktu HP)</div>
+        <div class="chip ${mode==='manual'?'selected':''}" onclick="app.setWaktuMode('manual')">✏️ Manual</div>
+      </div>
+      ${mode === 'manual' ? `
+      <label>Tanggal</label>
+      <input type="date" id="waktuManualDate" value="${dateVal}">
+      <label>Jam</label>
+      <input type="time" id="waktuManualTime" value="${timeVal}">
+      <button class="btn btn-gold btn-block" style="margin-top:14px;" onclick="app.applyWaktuManual()">Terapkan</button>
+      ` : ''}
+    `;
+    this.openModal(html);
+  },
+
+  setWaktuMode(mode) {
+    localStorage.setItem(STORAGE_KEYS.TIME_MODE, mode);
+    if (mode === 'otomatis') {
+      this.updateWaktuBadge();
+      this.closeModal();
+      this.renderTab();
+      toast('Waktu kembali otomatis');
+    } else {
+      this.openWaktuPicker(); // re-render modal biar muncul input tanggal/jam
+    }
+  },
+
+  applyWaktuManual() {
+    const dateVal = document.getElementById('waktuManualDate').value;
+    const timeVal = document.getElementById('waktuManualTime').value;
+    if (!dateVal || !timeVal) { toast('Isi tanggal dan jam dulu'); return; }
+    const ts = new Date(`${dateVal}T${timeVal}:00`).getTime();
+    if (isNaN(ts)) { toast('Tanggal/jam tidak valid'); return; }
+    localStorage.setItem(STORAGE_KEYS.TIME_MODE, 'manual');
+    localStorage.setItem(STORAGE_KEYS.TIME_MANUAL_TS, String(ts));
+    localStorage.setItem(STORAGE_KEYS.TIME_MANUAL_SET_AT, String(Date.now()));
+    this.updateWaktuBadge();
+    this.closeModal();
+    this.renderTab();
+    toast('Waktu manual diterapkan: ' + fmtTgl(ts));
+  },
+
   openKasirPicker() {
     const html = `
       <div class="modal-header"><h3>Pilih Kasir</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
       <div class="chip-group">
-        ${state.kasirList.map(k => `<div class="chip ${state.currentKasir===k?'selected':''}" onclick="app.setKasir('${esc(k)}')">${esc(k)}</div>`).join('')}
+        ${state.kasirList.map(k => `
+          <div class="chip ${state.currentKasir===k?'selected':''}" style="display:flex;align-items:center;gap:6px;padding-right:8px;">
+            <span onclick="app.setKasir('${esc(k)}')">${esc(k)}</span>
+            <span onclick="app.confirmHapusKasir('${esc(k)}')" style="opacity:0.6;font-weight:700;padding:0 2px;">&times;</span>
+          </div>
+        `).join('')}
       </div>
       <label>Tambah nama kasir baru</label>
       <div class="row">
@@ -153,6 +236,30 @@ const app = {
       </div>
     `;
     this.openModal(html);
+  },
+
+  confirmHapusKasir(name) {
+    const html = `
+      <div class="modal-header"><h3>Hapus Kasir?</h3><span class="modal-close" onclick="app.openKasirPicker()">&times;</span></div>
+      <p style="font-size:13px;color:#555;">Nama kasir <strong>${esc(name)}</strong> akan dihapus dari daftar. Transaksi lama yang sudah tercatat atas nama ini tidak akan berubah.</p>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn btn-outline" onclick="app.openKasirPicker()">Batal</button>
+        <button class="btn btn-danger" onclick="app.hapusKasir('${esc(name)}')">Ya, Hapus</button>
+      </div>
+    `;
+    this.openModal(html);
+  },
+
+  hapusKasir(name) {
+    state.kasirList = state.kasirList.filter(k => k !== name);
+    saveJSON(STORAGE_KEYS.KASIR_LIST, state.kasirList);
+    if (state.currentKasir === name) {
+      state.currentKasir = null;
+      localStorage.removeItem('nl_current_kasir');
+      this.updateKasirBadge();
+    }
+    toast(`Kasir ${name} dihapus`);
+    this.openKasirPicker();
   },
 
   addKasir() {
@@ -692,6 +799,7 @@ const app = {
         <button class="btn btn-outline" onclick="app.downloadStruk('${trx.id}')">💾 Simpan Gambar</button>
         <button class="btn btn-gold" onclick="app.shareStrukWA('${trx.id}')">📱 Kirim WA</button>
       </div>
+      <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="app.downloadStrukInternal('${trx.id}')">🧵 Cetak Struk Internal (Tim Cuci)</button>
       <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="app.closeModal(); app.renderTab();">Selesai</button>
     `;
     this.openModal(html);
@@ -835,6 +943,111 @@ const app = {
     toast('Struk tersimpan');
   },
 
+  async downloadStrukInternal(trxId) {
+    const trx = this.findTrx(trxId);
+    const canvas = await this.drawStrukInternalCanvas(trx);
+    const link = document.createElement('a');
+    link.download = `StrukInternal_${trx.nota}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    toast('Struk internal tersimpan');
+  },
+
+  async drawStrukInternalCanvas(trx) {
+    const width = 380;
+    const lineHeight = 22;
+    let lines = [];
+    lines.push({ text: `No Nota`, right: trx.nota, size: 14, bold: true });
+    lines.push({ text: `Pelanggan`, right: trx.pelanggan.nama, size: 13 });
+    lines.push({ text: `Kasir`, right: trx.kasir, size: 12 });
+    lines.push({ text: `Parfum`, right: trx.parfum, size: 12 });
+    lines.push({ text: `Est Selesai`, right: fmtTgl(trx.estSelesai), size: 12 });
+    lines.push({ text: '------------------------------------------', size: 11, center: true });
+    lines.push({ text: 'DAFTAR ITEM (untuk proses cuci):', size: 12, bold: true });
+    trx.items.forEach(item => {
+      const qtyDisplay = item.satuan === 'KG' ? item.qty.toLocaleString('id-ID', {maximumFractionDigits:2}) : item.qty;
+      const namaItem = item.isCustom ? item.catNama : `${item.varianLabel} (${item.catNama})`;
+      lines.push({ text: `• ${namaItem} — ${qtyDisplay} ${item.satuan}`, size: 13 });
+    });
+    lines.push({ text: '------------------------------------------', size: 11, center: true });
+    if (trx.catatan) {
+      lines.push({ text: 'CATATAN / INSTRUKSI KHUSUS:', size: 12, bold: true, color: '#b8562e' });
+      lines.push({ text: trx.catatan, size: 12.5, color: '#222', wrap: true, bold: true });
+    } else {
+      lines.push({ text: 'Tidak ada catatan khusus.', size: 11.5, color: '#999' });
+    }
+    lines.push({ text: '------------------------------------------', size: 11, center: true });
+    lines.push({ text: '(Struk internal - tanpa harga, untuk tim cuci)', size: 9.5, center: true, color: '#999' });
+
+    const logoImg = await this.getLogoImg();
+    const logoW = 130;
+    const logoH = logoImg ? Math.round(logoW * logoImg.height / logoImg.width) : 0;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    let totalHeight = logoH + 30;
+    const measuredLines = [];
+    lines.forEach(l => {
+      ctx.font = `${l.bold ? 'bold' : ''} ${l.size}px Courier New`;
+      if (l.wrap) {
+        const words = l.text.split(' ');
+        let cur = '';
+        const wrapped = [];
+        words.forEach(w => {
+          const test = cur ? cur + ' ' + w : w;
+          if (ctx.measureText(test).width > width - 40) {
+            wrapped.push(cur);
+            cur = w;
+          } else cur = test;
+        });
+        if (cur) wrapped.push(cur);
+        wrapped.forEach(w => { measuredLines.push({ ...l, text: w }); totalHeight += lineHeight; });
+      } else {
+        measuredLines.push(l);
+        totalHeight += lineHeight;
+      }
+    });
+    totalHeight += 24;
+
+    canvas.width = width * 2;
+    canvas.height = totalHeight * 2;
+    canvas.style.width = width + 'px';
+    canvas.style.height = totalHeight + 'px';
+    ctx.scale(2, 2);
+    ctx.fillStyle = '#fffdf5';
+    ctx.fillRect(0, 0, width, totalHeight);
+
+    let y = 14;
+    if (logoImg) {
+      ctx.drawImage(logoImg, width/2 - logoW/2, y, logoW, logoH);
+      y += logoH + 4;
+    }
+    ctx.textAlign = 'center'; ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#8a4a1e';
+    ctx.fillText('STRUK INTERNAL — TIM CUCI', width/2, y + 12);
+    y += 26;
+
+    ctx.textAlign = 'left';
+    measuredLines.forEach(l => {
+      ctx.font = `${l.bold ? 'bold' : ''} ${l.size}px 'Courier New', monospace`;
+      ctx.fillStyle = l.color || '#222';
+      if (l.center) {
+        ctx.textAlign = 'center';
+        ctx.fillText(l.text, width/2, y);
+        ctx.textAlign = 'left';
+      } else if (l.right !== undefined) {
+        ctx.fillText(l.text, 20, y);
+        ctx.textAlign = 'right';
+        ctx.fillText(l.right, width - 20, y);
+        ctx.textAlign = 'left';
+      } else {
+        ctx.fillText(l.text, 20, y);
+      }
+      y += lineHeight;
+    });
+
+    return canvas;
+  },
+
   async shareStrukWA(trxId) {
     const trx = this.findTrx(trxId);
     const waTab = window.open('', '_blank');
@@ -951,7 +1164,7 @@ const app = {
   kirimNotifSiapDiambil(trxId) {
     const t = this.findTrx(trxId);
     if (!t) return;
-    const pesan = `Halo ${t.pelanggan.nama}, cucian Anda di Naufal Laundry (${t.nota}) sudah *siap diambil*.\n\nTotal: ${fmtRupiah(t.total)}\nStatus Bayar: ${t.statusBayar}\n\nDitunggu ya kedatangannya di Jl. Ahmad No. 9, Pamoyanan, Cicendo, Bandung. Terima kasih! 🙏`;
+    const pesan = `Halo Kak ${t.pelanggan.nama}, cucian Anda di Naufal Laundry (${t.nota}) sudah *siap diambil*.\n\nTotal: ${fmtRupiah(t.total)}\nStatus Bayar: ${t.statusBayar}\n\nDitunggu ya kedatangannya di Jl. Ahmad No. 9, Pamoyanan, Cicendo, Bandung. Terima kasih! 🙏\n\nOh iya, kalau ada waktu, kami senang banget kalau boleh dengar masukan soal layanan kami di sini: https://forms.gle/SfhNqXrkuMFYiaS27 🙏`;
     const telp = (t.pelanggan.telp || '').replace(/\D/g, '');
     const waNumber = telp ? (telp.startsWith('0') ? '62' + telp.slice(1) : telp) : '';
     const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(pesan)}`;
@@ -1025,10 +1238,34 @@ const app = {
           <div style="margin-left:auto;display:flex;gap:6px;">
             <button class="btn btn-outline btn-sm" onclick="app.lihatStrukLama('${t.id}')">Lihat Struk</button>
             <button class="btn btn-outline btn-sm" onclick="app.openEditTransaksi('${t.id}')">Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="app.confirmHapusTransaksi('${t.id}')">Hapus</button>
           </div>
         </div>
       </div>
     `;
+  },
+
+  confirmHapusTransaksi(trxId) {
+    const t = this.findTrx(trxId);
+    if (!t) return;
+    const html = `
+      <div class="modal-header"><h3>Hapus Transaksi?</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <p style="font-size:13px;color:#555;">Transaksi <strong>${esc(t.nota)}</strong> (${esc(t.pelanggan.nama)}, ${fmtRupiah(t.total)}) akan dihapus permanen. Aksi ini biasanya untuk keperluan development/koreksi data, dan tidak bisa dibatalkan.</p>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn btn-outline" onclick="app.closeModal()">Batal</button>
+        <button class="btn btn-danger" onclick="app.hapusTransaksi('${t.id}')">Ya, Hapus</button>
+      </div>
+    `;
+    this.openModal(html);
+  },
+
+  hapusTransaksi(trxId) {
+    let list = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
+    list = list.filter(x => x.id !== trxId);
+    saveJSON(STORAGE_KEYS.TRANSAKSI, list);
+    this.closeModal();
+    this.renderTab();
+    toast('Transaksi dihapus');
   },
 
   lihatStrukLama(trxId) {
@@ -1088,6 +1325,7 @@ const app = {
         <h2>Data Pelanggan <span class="badge-count">${list.length}</span></h2>
         <input type="text" placeholder="Cari nama pelanggan..." value="${esc(state._pelangganSearch||'')}"
           oninput="state._pelangganSearch=this.value; app.renderTab()">
+        <button class="btn btn-gold btn-block" style="margin-top:10px;" onclick="app.openTambahPelanggan()">+ Tambah Pelanggan Baru</button>
       </div>
       <div class="card">
         ${filtered.length === 0
@@ -1108,6 +1346,37 @@ const app = {
         }
       </div>
     `;
+  },
+
+  openTambahPelanggan() {
+    const html = `
+      <div class="modal-header"><h3>Tambah Pelanggan Baru</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <label>Nama</label>
+      <input type="text" id="newPelangganNama" placeholder="Nama pelanggan">
+      <label>Alamat <span style="font-weight:400;color:#999;">(opsional)</span></label>
+      <input type="text" id="newPelangganAlamat" placeholder="Alamat">
+      <label>No. Telp <span style="font-weight:400;color:#999;">(opsional)</span></label>
+      <input type="tel" id="newPelangganTelp" placeholder="08xxxxxxxxxx">
+      <button class="btn btn-gold btn-block" style="margin-top:14px;" onclick="app.simpanPelangganBaru()">+ Simpan Pelanggan</button>
+    `;
+    this.openModal(html);
+  },
+
+  simpanPelangganBaru() {
+    const nama = document.getElementById('newPelangganNama').value.trim();
+    const alamat = document.getElementById('newPelangganAlamat').value.trim();
+    const telp = document.getElementById('newPelangganTelp').value.trim();
+    if (!nama) { toast('Isi nama pelanggan dulu'); return; }
+
+    const list = loadJSON(STORAGE_KEYS.PELANGGAN, []);
+    const existing = list.find(x => x.nama.toLowerCase() === nama.toLowerCase());
+    if (existing) { toast('Nama ini sudah ada di data pelanggan'); return; }
+
+    list.push({ id: uid('pel'), nama, alamat, telp, createdAt: nowTs() });
+    saveJSON(STORAGE_KEYS.PELANGGAN, list);
+    this.closeModal();
+    this.renderTab();
+    toast(`${nama} ditambahkan`);
   },
 
   editPelanggan(id) {
@@ -1530,7 +1799,96 @@ const app = {
     return y;
   },
 
-  async downloadLaporanHarianPDF(tglStr) {
+  downloadLaporanHarianPDF(tglStr) {
+    const html = `
+      <div class="modal-header"><h3>Tanda Tangan Operator</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <p style="font-size:12px;color:#777;margin-top:0;">Tanda tangan di area bawah ini sebelum laporan di-export.</p>
+      <canvas id="signatureCanvas" width="600" height="240" style="width:100%;height:150px;border:1.5px dashed var(--line);border-radius:8px;background:#fff;touch-action:none;"></canvas>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn btn-outline" onclick="app.clearSignature()">Hapus</button>
+        <button class="btn btn-outline" onclick="app.skipSignatureAndExport('${tglStr}')">Lewati</button>
+        <button class="btn btn-gold" onclick="app.confirmSignatureAndExport('${tglStr}')">✓ Konfirmasi & Export</button>
+      </div>
+    `;
+    this.openModal(html);
+    this.initSignaturePad();
+  },
+
+  initSignaturePad() {
+    const canvas = document.getElementById('signatureCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    let drawing = false;
+    let lastX = 0, lastY = 0;
+
+    const getPos = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+    };
+
+    const start = (e) => {
+      e.preventDefault();
+      drawing = true;
+      const pos = getPos(e);
+      lastX = pos.x; lastY = pos.y;
+    };
+    const move = (e) => {
+      if (!drawing) return;
+      e.preventDefault();
+      const pos = getPos(e);
+      ctx.beginPath();
+      ctx.moveTo(lastX, lastY);
+      ctx.lineTo(pos.x, pos.y);
+      ctx.stroke();
+      lastX = pos.x; lastY = pos.y;
+    };
+    const end = () => { drawing = false; };
+
+    canvas.addEventListener('mousedown', start);
+    canvas.addEventListener('mousemove', move);
+    canvas.addEventListener('mouseup', end);
+    canvas.addEventListener('mouseleave', end);
+    canvas.addEventListener('touchstart', start, { passive: false });
+    canvas.addEventListener('touchmove', move, { passive: false });
+    canvas.addEventListener('touchend', end);
+  },
+
+  clearSignature() {
+    const canvas = document.getElementById('signatureCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  },
+
+  _isSignatureBlank(canvas) {
+    const ctx = canvas.getContext('2d');
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] !== 0) return false;
+    }
+    return true;
+  },
+
+  async confirmSignatureAndExport(tglStr) {
+    const canvas = document.getElementById('signatureCanvas');
+    if (this._isSignatureBlank(canvas)) { toast('Tanda tangan dulu, atau tap Lewati'); return; }
+    const signatureDataUrl = canvas.toDataURL('image/png');
+    this.closeModal();
+    await this._generateLaporanHarianPDF(tglStr, signatureDataUrl);
+  },
+
+  async skipSignatureAndExport(tglStr) {
+    this.closeModal();
+    await this._generateLaporanHarianPDF(tglStr, null);
+  },
+
+  async _generateLaporanHarianPDF(tglStr, signatureDataUrl) {
     toast('Menyiapkan PDF...');
     const trxAll = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
     const pengAll = loadJSON(STORAGE_KEYS.PENGELUARAN, []);
@@ -1651,7 +2009,25 @@ const app = {
     // Tanda tangan
     ctx.textAlign = 'left'; ctx.font = '12px sans-serif'; ctx.fillStyle = '#444';
     ctx.fillText('Tanda tangan operator:', 20, y);
-    y += 50;
+    y += 8;
+    if (signatureDataUrl) {
+      const sigImg = await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = signatureDataUrl;
+      });
+      if (sigImg) {
+        const sigW = 160;
+        const sigH = Math.round(sigW * sigImg.height / sigImg.width);
+        ctx.drawImage(sigImg, 20, y, sigW, sigH);
+        y += sigH + 6;
+      } else {
+        y += 50;
+      }
+    } else {
+      y += 50;
+    }
     ctx.strokeStyle = '#999'; ctx.beginPath(); ctx.moveTo(20, y); ctx.lineTo(220, y); ctx.stroke();
     y += 16;
     ctx.font = '10.5px sans-serif'; ctx.fillStyle = '#888';
@@ -2132,8 +2508,6 @@ const app = {
 
   exportExcelBulanan() {
     toast('Sedang menyiapkan file Excel...');
-    // Export sederhana berbasis CSV multi-file di-zip manual tidak tersedia offline tanpa library;
-    // gunakan pendekatan: generate 1 file Excel (SpreadsheetML XML) yang bisa dibuka Excel/Sheets.
     const [y, m] = (state._laporanBulan || '').split('-').map(Number);
     const trxAll = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
     const inMonth = (ts) => { const d = new Date(ts); return d.getFullYear()===y && (d.getMonth()+1)===m; };
@@ -2146,51 +2520,214 @@ const app = {
       perKasir[t.kasir].totalOmzet += t.total;
     });
 
-    const escXml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const cell = (v, type) => {
-      if (type === 'num') return `<Cell><Data ss:Type="Number">${v}</Data></Cell>`;
-      return `<Cell><Data ss:Type="String">${escXml(v)}</Data></Cell>`;
-    };
-
     const bayarBulan = { Tunai: 0, QRIS: 0, Transfer: 0, 'Belum Bayar': 0 };
     trxBulan.forEach(t => {
       if (t.statusBayar === 'Lunas' && t.metodeBayar) bayarBulan[t.metodeBayar] += t.total;
       else bayarBulan['Belum Bayar'] += t.total;
     });
 
-    let rekapRows = `<Row>${cell('Bulan')}${cell(state._laporanBulan)}</Row>`;
-    rekapRows += `<Row>${cell('Total Omzet')}${cell(trxBulan.reduce((a,b)=>a+b.total,0),'num')}</Row>`;
-    rekapRows += `<Row>${cell('Jumlah Transaksi')}${cell(trxBulan.length,'num')}</Row>`;
-    rekapRows += `<Row></Row>`;
-    rekapRows += `<Row>${cell('Tunai')}${cell(bayarBulan.Tunai,'num')}</Row>`;
-    rekapRows += `<Row>${cell('QRIS')}${cell(bayarBulan.QRIS,'num')}</Row>`;
-    rekapRows += `<Row>${cell('Transfer')}${cell(bayarBulan.Transfer,'num')}</Row>`;
-    rekapRows += `<Row>${cell('Belum Bayar')}${cell(bayarBulan['Belum Bayar'],'num')}</Row>`;
+    const rekapRows = [
+      ['Bulan', state._laporanBulan],
+      ['Total Omzet', trxBulan.reduce((a,b)=>a+b.total,0)],
+      ['Jumlah Transaksi', trxBulan.length],
+      [],
+      ['Tunai', bayarBulan.Tunai],
+      ['QRIS', bayarBulan.QRIS],
+      ['Transfer', bayarBulan.Transfer],
+      ['Belum Bayar', bayarBulan['Belum Bayar']],
+    ];
 
-    let kinerjaRows = `<Row>${cell('Kasir')}${cell('Jumlah Transaksi')}${cell('Total Omzet')}</Row>`;
+    const kinerjaRows = [['Kasir', 'Jumlah Transaksi', 'Total Omzet']];
     Object.entries(perKasir).forEach(([k,d]) => {
-      kinerjaRows += `<Row>${cell(k)}${cell(d.jumlahTransaksi,'num')}${cell(d.totalOmzet,'num')}</Row>`;
+      kinerjaRows.push([k, d.jumlahTransaksi, d.totalOmzet]);
     });
 
-    let dataRows = `<Row>${cell('Nota')}${cell('Tanggal Masuk')}${cell('Pelanggan')}${cell('Kasir')}${cell('Total')}${cell('Status Bayar')}${cell('Metode Bayar')}${cell('Status Pesanan')}</Row>`;
+    const dataRows = [['Nota', 'Tanggal Masuk', 'Pelanggan', 'Kasir', 'Total', 'Status Bayar', 'Metode Bayar', 'Status Pesanan']];
     trxBulan.forEach(t => {
-      dataRows += `<Row>${cell(t.nota)}${cell(fmtTgl(t.tglMasuk))}${cell(t.pelanggan.nama)}${cell(t.kasir)}${cell(t.total,'num')}${cell(t.statusBayar)}${cell(t.metodeBayar||'-')}${cell(t.statusPesanan)}</Row>`;
+      dataRows.push([t.nota, fmtTgl(t.tglMasuk), t.pelanggan.nama, t.kasir, t.total, t.statusBayar, t.metodeBayar || '-', t.statusPesanan]);
     });
 
-    const xml = `<?xml version="1.0"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Worksheet ss:Name="Rekap Bulanan"><Table>${rekapRows}</Table></Worksheet>
-<Worksheet ss:Name="Kinerja Kasir"><Table>${kinerjaRows}</Table></Worksheet>
-<Worksheet ss:Name="Data Transaksi"><Table>${dataRows}</Table></Worksheet>
-</Workbook>`;
+    const sheetsData = [
+      { name: 'Rekap Bulanan', rows: rekapRows },
+      { name: 'Kinerja Kasir', rows: kinerjaRows },
+      { name: 'Data Transaksi', rows: dataRows },
+    ];
 
-    const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+    const xlsxBytes = this.buildXlsx(sheetsData);
+    const blob = new Blob([xlsxBytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `Laporan_NaufalLaundry_${state._laporanBulan}.xls`;
+    link.download = `Laporan_NaufalLaundry_${state._laporanBulan}.xlsx`;
     link.click();
     toast('Excel berhasil di-export');
+  },
+
+  // ============================================
+  // XLSX BUILDER (format OOXML asli, tanpa dependency eksternal)
+  // ============================================
+  _crc32(buf) {
+    let table = this.__crc32Table;
+    if (!table) {
+      table = this.__crc32Table = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        table[n] = c >>> 0;
+      }
+    }
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) crc = table[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  },
+
+  _dosDateTime(date) {
+    const dosTime = ((date.getHours() & 0x1F) << 11) | ((date.getMinutes() & 0x3F) << 5) | ((date.getSeconds() >> 1) & 0x1F);
+    const dosDate = (((date.getFullYear() - 1980) & 0x7F) << 9) | (((date.getMonth() + 1) & 0xF) << 5) | (date.getDate() & 0x1F);
+    return { dosTime, dosDate };
+  },
+
+  buildZip(files) {
+    const encoder = new TextEncoder();
+    const localParts = [];
+    const centralParts = [];
+    let offset = 0;
+    const { dosTime, dosDate } = this._dosDateTime(new Date());
+
+    files.forEach(f => {
+      const nameBytes = encoder.encode(f.name);
+      const content = typeof f.content === 'string' ? encoder.encode(f.content) : f.content;
+      const crc = this._crc32(content);
+      const size = content.length;
+
+      const localHeader = new Uint8Array(30 + nameBytes.length);
+      const lv = new DataView(localHeader.buffer);
+      lv.setUint32(0, 0x04034b50, true);
+      lv.setUint16(4, 20, true);
+      lv.setUint16(6, 0, true);
+      lv.setUint16(8, 0, true);
+      lv.setUint16(10, dosTime, true);
+      lv.setUint16(12, dosDate, true);
+      lv.setUint32(14, crc, true);
+      lv.setUint32(18, size, true);
+      lv.setUint32(22, size, true);
+      lv.setUint16(26, nameBytes.length, true);
+      lv.setUint16(28, 0, true);
+      localHeader.set(nameBytes, 30);
+      localParts.push(localHeader, content);
+
+      const centralHeader = new Uint8Array(46 + nameBytes.length);
+      const cv = new DataView(centralHeader.buffer);
+      cv.setUint32(0, 0x02014b50, true);
+      cv.setUint16(4, 20, true);
+      cv.setUint16(6, 20, true);
+      cv.setUint16(8, 0, true);
+      cv.setUint16(10, 0, true);
+      cv.setUint16(12, dosTime, true);
+      cv.setUint16(14, dosDate, true);
+      cv.setUint32(16, crc, true);
+      cv.setUint32(20, size, true);
+      cv.setUint32(24, size, true);
+      cv.setUint16(28, nameBytes.length, true);
+      cv.setUint16(30, 0, true);
+      cv.setUint16(32, 0, true);
+      cv.setUint16(34, 0, true);
+      cv.setUint16(36, 0, true);
+      cv.setUint32(38, 0, true);
+      cv.setUint32(42, offset, true);
+      centralHeader.set(nameBytes, 46);
+      centralParts.push(centralHeader);
+      offset += localHeader.length + content.length;
+    });
+
+    const centralStart = offset;
+    let centralSize = 0;
+    centralParts.forEach(c => centralSize += c.length);
+
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(4, 0, true);
+    ev.setUint16(6, 0, true);
+    ev.setUint16(8, files.length, true);
+    ev.setUint16(10, files.length, true);
+    ev.setUint32(12, centralSize, true);
+    ev.setUint32(16, centralStart, true);
+    ev.setUint16(20, 0, true);
+
+    const allParts = [...localParts, ...centralParts, eocd];
+    const totalLen = allParts.reduce((a, p) => a + p.length, 0);
+    const result = new Uint8Array(totalLen);
+    let pos = 0;
+    allParts.forEach(p => { result.set(p, pos); pos += p.length; });
+    return result;
+  },
+
+  _xlsxColLetter(n) {
+    let s = '';
+    while (n > 0) {
+      const rem = (n - 1) % 26;
+      s = String.fromCharCode(65 + rem) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  },
+
+  _escXmlAttr(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  },
+
+  // sheetsData: [{ name, rows: [[val, ...], ...] }], val string atau number
+  buildXlsx(sheetsData) {
+    const files = [];
+    const escXml = this._escXmlAttr;
+
+    files.push({ name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+${sheetsData.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('\n')}
+</Types>` });
+
+    files.push({ name: '_rels/.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>` });
+
+    files.push({ name: 'xl/_rels/workbook.xml.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${sheetsData.map((s, i) => `<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('\n')}
+</Relationships>` });
+
+    files.push({ name: 'xl/workbook.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets>
+${sheetsData.map((s, i) => `<sheet name="${escXml(s.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('\n')}
+</sheets>
+</workbook>` });
+
+    sheetsData.forEach((s, i) => {
+      let rowsXml = '';
+      s.rows.forEach((row, rIdx) => {
+        const rowNum = rIdx + 1;
+        let cellsXml = '';
+        row.forEach((val, cIdx) => {
+          const cellRef = this._xlsxColLetter(cIdx + 1) + rowNum;
+          if (typeof val === 'number') {
+            cellsXml += `<c r="${cellRef}"><v>${val}</v></c>`;
+          } else if (val != null && val !== '') {
+            cellsXml += `<c r="${cellRef}" t="inlineStr"><is><t xml:space="preserve">${escXml(val)}</t></is></c>`;
+          }
+        });
+        rowsXml += `<row r="${rowNum}">${cellsXml}</row>`;
+      });
+      files.push({ name: `xl/worksheets/sheet${i+1}.xml`, content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData>${rowsXml}</sheetData>
+</worksheet>` });
+    });
+
+    return this.buildZip(files);
   },
 
 };

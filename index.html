@@ -48,9 +48,10 @@
   header .sub { font-size: 10px; opacity: 0.7; margin-top: 1px; }
   header .kasir-badge {
     background: rgba(212,175,106,0.15); border: 1px solid var(--gold);
-    padding: 5px 10px; border-radius: 20px; font-size: 11px; color: var(--gold-light);
-    display: flex; align-items: center; gap: 5px;
+    padding: 5px 8px; border-radius: 20px; font-size: 10.5px; color: var(--gold-light);
+    display: flex; align-items: center; gap: 4px; white-space: nowrap;
   }
+  header h1 { font-size: 14px; }
 
   /* TABS NAV */
   nav.tabs {
@@ -260,8 +261,13 @@
         <div class="sub">Sistem Kasir Offline</div>
       </div>
     </div>
-    <div class="kasir-badge" id="kasirBadge" onclick="app.openKasirPicker()">
-      👤 <span id="kasirBadgeName">Pilih Kasir</span>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <div class="kasir-badge" id="waktuBadge" onclick="app.openWaktuPicker()">
+        🕐 <span id="waktuBadgeText">Otomatis</span>
+      </div>
+      <div class="kasir-badge" id="kasirBadge" onclick="app.openKasirPicker()">
+        👤 <span id="kasirBadgeName">Pilih Kasir</span>
+      </div>
     </div>
   </header>
 
