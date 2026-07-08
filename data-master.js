@@ -224,6 +224,8 @@ const PARFUM_OPTIONS = ['C Berry', 'Royal'];
 
 const METODE_BAYAR = ['Tunai', 'QRIS', 'Transfer'];
 
+const ONGKIR_JAUH = 5000;
+
 const LEVEL_LABEL = {
   BIASA: 'Biasa',
   NORMAL: 'Normal',

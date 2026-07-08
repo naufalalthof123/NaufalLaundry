@@ -81,6 +81,7 @@ const state = {
   catatanRincian: '',
   diskonNominal: 0,
   diskonPersen: 0,
+  ongkirJauh: false,
   editingTransaksiId: null, // kalau sedang edit transaksi lama
 };
 
@@ -98,6 +99,8 @@ const TABS = [
 const app = {
 
   init() {
+    const headerLogo = document.getElementById('headerLogo');
+    if (headerLogo && typeof LOGO_SMALL_B64 !== 'undefined') headerLogo.src = LOGO_SMALL_B64;
     this.renderTabs();
     this.updateKasirBadge();
     this.renderTab();
@@ -187,6 +190,9 @@ const app = {
               <span>${esc(k.nama)}</span>
             </div>
           `).join('')}
+          <div class="custom-item-tile" onclick="app.openCustomItemForm()">
+            <span>+ Item Lainnya</span>
+          </div>
         </div>
       </div>
 
@@ -215,6 +221,10 @@ const app = {
         <label>No. Telp <span style="font-weight:400;color:#999;">(opsional)</span></label>
         <input type="tel" id="inpPelangganTelp" placeholder="08xxxxxxxxxx" value="${esc(state.pelangganTelp)}"
           oninput="state.pelangganTelp=this.value">
+        <div class="ongkir-toggle" onclick="app.toggleOngkir()">
+          <input type="checkbox" ${state.ongkirJauh ? 'checked' : ''} style="pointer-events:none;">
+          Delivery Jauh (+${fmtRupiah(ONGKIR_JAUH)})
+        </div>
       </div>
 
       <div class="card">
@@ -262,7 +272,10 @@ const app = {
       <div style="height:80px;"></div>
       <div class="total-bar">
         <div class="total-row">
-          <span class="total-label">Total (${this.estimasiSelesaiText()})</span>
+          <span class="total-label">
+            Total (${this.estimasiSelesaiText()})
+            ${cartTotal.ongkir > 0 ? `<br><span style="font-size:10px;">termasuk ongkir ${fmtRupiah(cartTotal.ongkir)}</span>` : ''}
+          </span>
           <span class="total-amount">${fmtRupiah(cartTotal.grandTotal)}</span>
         </div>
         <button class="btn btn-gold btn-block" onclick="app.simpanTransaksi()">✓ Simpan Transaksi & Cetak Struk</button>
@@ -277,9 +290,9 @@ const app = {
       <div class="cart-item">
         <div class="cart-item-top">
           <div>
-            <div class="cart-item-name">${esc(item.catNama)} - ${esc(item.varianLabel)}</div>
+            <div class="cart-item-name">${item.isCustom ? '✏️ ' : ''}${esc(item.catNama)}${item.isCustom ? '' : ' - ' + esc(item.varianLabel)}</div>
             <div class="cart-item-sub">
-              <span class="pill pill-${item.level}">${LEVEL_LABEL[item.level]}</span>
+              ${item.isCustom ? '<span class="pill" style="background:#f5eee0;color:var(--gold);">Custom</span>' : `<span class="pill pill-${item.level}">${LEVEL_LABEL[item.level]}</span>`}
               ${fmtRupiah(item.harga)}/${item.satuan}
             </div>
           </div>
@@ -359,6 +372,49 @@ const app = {
     toast(`${v.label} ditambahkan`);
   },
 
+  openCustomItemForm() {
+    const html = `
+      <div class="modal-header"><h3>Item Lainnya (Custom)</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <label>Nama Item</label>
+      <input type="text" id="customItemNama" placeholder="Contoh: Cuci Helm">
+      <label>Harga Satuan (Rp)</label>
+      <input type="number" id="customItemHarga" placeholder="0">
+      <label>Jumlah/Qty</label>
+      <input type="number" id="customItemQty" value="1" step="0.01">
+      <button class="btn btn-gold btn-block" style="margin-top:14px;" onclick="app.addCustomItemToCart()">+ Tambah ke Keranjang</button>
+    `;
+    this.openModal(html);
+  },
+
+  addCustomItemToCart() {
+    const nama = document.getElementById('customItemNama').value.trim();
+    const harga = parseFloat(document.getElementById('customItemHarga').value) || 0;
+    const qty = parseFloat(document.getElementById('customItemQty').value) || 1;
+    if (!nama) { toast('Isi nama item dulu'); return; }
+    if (harga <= 0) { toast('Isi harga dulu'); return; }
+
+    state.cart.push({
+      catId: 'custom',
+      catNama: nama,
+      jenisCuci: 'SA',
+      varianId: 'custom',
+      varianLabel: 'Custom',
+      satuan: 'PCS',
+      level: 'BIASA',
+      waktuJam: 72,
+      harga: harga,
+      qty: qty,
+      isCustom: true,
+      promoActive: false,
+      promoKelipatan: 10,
+      promoGratis: 1,
+      promoFactor: 1,
+    });
+    this.closeModal();
+    this.renderTab();
+    toast(`${nama} ditambahkan`);
+  },
+
   removeCartItem(idx) {
     state.cart.splice(idx, 1);
     this.renderTab();
@@ -402,6 +458,8 @@ const app = {
     item.promoFactor = item.qty > 0 ? efektifKg / item.qty : 1;
   },
 
+  toggleOngkir() { state.ongkirJauh = !state.ongkirJauh; this.renderTab(); },
+
   setParfum(p) { state.parfum = p; this.renderTab(); },
   setMetodeBayar(m) { state.metodeBayar = m; this.renderTab(); },
   setStatusBayar(s) {
@@ -439,7 +497,8 @@ const app = {
     let afterDiskon = subtotal - (state.diskonNominal || 0);
     afterDiskon = afterDiskon - (afterDiskon * (state.diskonPersen || 0) / 100);
     afterDiskon = Math.max(0, afterDiskon);
-    return { subtotal, grandTotal: afterDiskon };
+    const ongkir = state.ongkirJauh ? ONGKIR_JAUH : 0;
+    return { subtotal, ongkir, grandTotal: afterDiskon + ongkir };
   },
 
   maxWaktuJam() {
@@ -462,7 +521,7 @@ const app = {
     const ts = nowTs();
     const jamSelesai = this.maxWaktuJam();
     const estSelesaiTs = ts + jamSelesai * 3600 * 1000;
-    const { subtotal, grandTotal } = this.calcCartTotal();
+    const { subtotal, ongkir, grandTotal } = this.calcCartTotal();
     const notaNum = nextNotaNumber();
 
     const trx = {
@@ -477,6 +536,7 @@ const app = {
       catatan: state.catatanRincian,
       diskonNominal: state.diskonNominal || 0,
       diskonPersen: state.diskonPersen || 0,
+      ongkir,
       subtotal,
       total: grandTotal,
       statusBayar: state.statusBayar,
@@ -506,6 +566,7 @@ const app = {
     state.catatanRincian = '';
     state.diskonNominal = 0;
     state.diskonPersen = 0;
+    state.ongkirJauh = false;
   },
 
   upsertPelanggan(p) {
@@ -538,19 +599,24 @@ const app = {
     }).join('');
 
     let diskonLine = '';
+    const totalDiskon = (trx.subtotal + (trx.ongkir||0)) - trx.total;
     if (trx.diskonNominal > 0 || trx.diskonPersen > 0) {
       diskonLine = `<div style="display:flex;justify-content:space-between;color:#b8562e;">
         <span>Diskon ${trx.diskonPersen>0?trx.diskonPersen+'%':''}${trx.diskonNominal>0?' -'+fmtRupiah(trx.diskonNominal):''}</span>
-        <span>-${fmtRupiah(trx.subtotal - trx.total)}</span>
+        <span>-${fmtRupiah(totalDiskon)}</span>
+      </div>`;
+    }
+    let ongkirLine = '';
+    if (trx.ongkir > 0) {
+      ongkirLine = `<div style="display:flex;justify-content:space-between;">
+        <span>Ongkir (Delivery Jauh)</span><span>${fmtRupiah(trx.ongkir)}</span>
       </div>`;
     }
 
     return `
       <div id="strukArea" style="background:#fff;padding:20px;font-family:'Courier New',monospace;font-size:12.5px;color:#333;max-width:340px;margin:0 auto;">
         <div style="text-align:center;margin-bottom:10px;">
-          <div style="width:52px;height:52px;border-radius:10px;background:linear-gradient(135deg,#d4af6a,#b8934a);color:#1a1a1a;
-            display:flex;align-items:center;justify-content:center;font-weight:700;font-size:22px;margin:0 auto 6px;">N</div>
-          <div style="font-size:16px;font-weight:700;">Naufal Laundry</div>
+          <img src="${typeof LOGO_FULL_B64 !== 'undefined' ? LOGO_FULL_B64 : ''}" style="max-width:160px;margin:0 auto 4px;display:block;">
           <div style="font-size:10.5px;color:#666;">Jl. Ahmad No. 9, Pamoyanan, Cicendo, Bandung</div>
         </div>
         <div style="border-top:1px dashed #999;margin:8px 0;"></div>
@@ -564,6 +630,7 @@ const app = {
         <div style="border-top:1px dashed #999;margin:8px 0;"></div>
         ${itemsHtml}
         <div style="border-top:1px dashed #999;margin:8px 0;"></div>
+        ${ongkirLine}
         ${diskonLine}
         <div style="display:flex;justify-content:space-between;"><span>Status</span><strong>${esc(trx.statusBayar)}</strong></div>
         <div style="display:flex;justify-content:space-between;"><span>Metode Bayar</span><strong>${esc(trx.metodeBayar || '-')}</strong></div>
@@ -597,13 +664,21 @@ const app = {
     return loadJSON(STORAGE_KEYS.TRANSAKSI, []).find(t => t.id === id);
   },
 
-  drawStrukCanvas(trx) {
+  _logoImgCache: null,
+  getLogoImg() {
+    if (this._logoImgCache) return Promise.resolve(this._logoImgCache);
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => { this._logoImgCache = img; resolve(img); };
+      img.onerror = () => resolve(null);
+      img.src = (typeof LOGO_FULL_B64 !== 'undefined') ? LOGO_FULL_B64 : '';
+    });
+  },
+
+  async drawStrukCanvas(trx) {
     const width = 380;
     const lineHeight = 20;
     let lines = [];
-    lines.push({ text: 'NAUFAL LAUNDRY', size: 18, bold: true, center: true });
-    lines.push({ text: 'Jl. Ahmad No. 9, Pamoyanan, Cicendo, Bandung', size: 11, center: true, color: '#666' });
-    lines.push({ text: '------------------------------------------', size: 11, center: true });
     lines.push({ text: `No Nota`, right: trx.nota, size: 12.5 });
     lines.push({ text: `Pelanggan`, right: trx.pelanggan.nama, size: 12.5 });
     if (trx.pelanggan.alamat) lines.push({ text: `Alamat`, right: trx.pelanggan.alamat, size: 11 });
@@ -615,12 +690,17 @@ const app = {
     trx.items.forEach(item => {
       const sub = item.harga * item.qty * (item.promoActive ? item.promoFactor : 1);
       const qtyDisplay = item.satuan === 'KG' ? item.qty.toLocaleString('id-ID', {maximumFractionDigits:2}) : item.qty;
-      lines.push({ text: `${item.varianLabel} (${item.catNama})`, size: 12.5 });
+      const namaItem = item.isCustom ? item.catNama : `${item.varianLabel} (${item.catNama})`;
+      lines.push({ text: namaItem, size: 12.5 });
       lines.push({ text: `${qtyDisplay} ${item.satuan} x ${fmtRupiah(item.harga)}`, right: fmtRupiah(sub), size: 12, color: '#444' });
     });
     lines.push({ text: '------------------------------------------', size: 11, center: true });
-    if (trx.subtotal !== trx.total) {
-      lines.push({ text: `Diskon`, right: '-' + fmtRupiah(trx.subtotal - trx.total), size: 12.5, color: '#b8562e' });
+    if (trx.ongkir > 0) {
+      lines.push({ text: `Ongkir (Delivery Jauh)`, right: fmtRupiah(trx.ongkir), size: 12.5 });
+    }
+    const totalDiskon = (trx.subtotal + (trx.ongkir||0)) - trx.total;
+    if (totalDiskon > 0) {
+      lines.push({ text: `Diskon`, right: '-' + fmtRupiah(totalDiskon), size: 12.5, color: '#b8562e' });
     }
     lines.push({ text: `Status`, right: trx.statusBayar, size: 12.5 });
     lines.push({ text: `Metode Bayar`, right: trx.metodeBayar || '-', size: 12.5 });
@@ -635,9 +715,13 @@ const app = {
     lines.push({ text: 'Info & pemesanan: 0821-1975-6778', size: 10.5, center: true, color: '#555' });
     lines.push({ text: 'Instagram: @naufallaundry.bdg', size: 10.5, center: true, color: '#555' });
 
+    const logoImg = await this.getLogoImg();
+    const logoW = 170;
+    const logoH = logoImg ? Math.round(logoW * logoImg.height / logoImg.width) : 0;
+
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    let totalHeight = 90;
+    let totalHeight = logoH + 40;
     const measuredLines = [];
     lines.forEach(l => {
       ctx.font = `${l.bold ? 'bold' : ''} ${l.size}px Courier New`;
@@ -659,7 +743,7 @@ const app = {
         totalHeight += lineHeight;
       }
     });
-    totalHeight += 30;
+    totalHeight += 40;
 
     canvas.width = width * 2;
     canvas.height = totalHeight * 2;
@@ -669,14 +753,18 @@ const app = {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, totalHeight);
 
-    let y = 20;
-    ctx.fillStyle = '#b8934a';
-    ctx.fillRect(width/2 - 26, y, 52, 52);
-    ctx.fillStyle = '#1a1a1a';
-    ctx.font = 'bold 28px Arial';
+    let y = 16;
+    if (logoImg) {
+      ctx.drawImage(logoImg, width/2 - logoW/2, y, logoW, logoH);
+      y += logoH + 8;
+    } else {
+      y += 10;
+    }
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#666';
     ctx.textAlign = 'center';
-    ctx.fillText('N', width/2, y + 36);
-    y += 70;
+    ctx.fillText('Jl. Ahmad No. 9, Pamoyanan, Cicendo, Bandung', width/2, y);
+    y += 22;
 
     ctx.textAlign = 'left';
     measuredLines.forEach(l => {
@@ -700,9 +788,9 @@ const app = {
     return canvas;
   },
 
-  downloadStruk(trxId) {
+  async downloadStruk(trxId) {
     const trx = this.findTrx(trxId);
-    const canvas = this.drawStrukCanvas(trx);
+    const canvas = await this.drawStrukCanvas(trx);
     const link = document.createElement('a');
     link.download = `Struk_${trx.nota.replace('/','-')}.png`;
     link.href = canvas.toDataURL('image/png');
@@ -710,10 +798,10 @@ const app = {
     toast('Struk tersimpan');
   },
 
-  shareStrukWA(trxId) {
+  async shareStrukWA(trxId) {
     const trx = this.findTrx(trxId);
     const waTab = window.open('', '_blank');
-    const canvas = this.drawStrukCanvas(trx);
+    const canvas = await this.drawStrukCanvas(trx);
     canvas.toBlob((blob) => {
       const url = URL.createObjectURL(blob);
       const telp = (trx.pelanggan.telp || '').replace(/\D/g, '');
@@ -1028,6 +1116,17 @@ const app = {
     const totalKeluar = keluar.reduce((a,b) => a + b.total, 0);
     const totalPengeluaran = pengeluaran.reduce((a,b) => a + b.jumlah, 0);
 
+    const breakdownBayar = (rows) => {
+      const b = { Tunai: 0, QRIS: 0, Transfer: 0, 'Belum Bayar': 0 };
+      rows.forEach(t => {
+        if (t.statusBayar === 'Lunas' && t.metodeBayar) b[t.metodeBayar] += t.total;
+        else b['Belum Bayar'] += t.total;
+      });
+      return b;
+    };
+    const bayarMasuk = breakdownBayar(masuk);
+    const bayarKeluar = breakdownBayar(keluar);
+
     body.innerHTML = `
       <div class="card">
         <label>Pilih Tanggal</label>
@@ -1037,6 +1136,7 @@ const app = {
       <div class="card">
         <h2>📥 Laporan Masuk Laundry — ${esc(fmtHari(this.parseInputDate(tglStr)))}, ${tglStr}</h2>
         ${this.renderLaporanTable(masuk, 'masuk')}
+        ${this.renderBayarBreakdown(bayarMasuk)}
         <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Pemasukan: ${fmtRupiah(totalMasuk)}</div>
         <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="app.downloadLaporanHarianImage('masuk','${tglStr}')">💾 Export Gambar</button>
       </div>
@@ -1044,6 +1144,7 @@ const app = {
       <div class="card">
         <h2>📤 Laporan Keluar Laundry — ${esc(fmtHari(this.parseInputDate(tglStr)))}, ${tglStr}</h2>
         ${this.renderLaporanTable(keluar, 'keluar')}
+        ${this.renderBayarBreakdown(bayarKeluar)}
         <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Diambil: ${fmtRupiah(totalKeluar)}</div>
         <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="app.downloadLaporanHarianImage('keluar','${tglStr}')">💾 Export Gambar</button>
       </div>
@@ -1066,6 +1167,23 @@ const app = {
           <div style="text-align:center;"><div style="font-size:10px;color:#888;">NET</div><div style="font-weight:800;color:${(totalMasuk-totalPengeluaran)>=0?'var(--ok)':'var(--danger)'};">${fmtRupiah(totalMasuk-totalPengeluaran)}</div></div>
         </div>
       </div>
+    `;
+  },
+
+  renderBayarBreakdown(b) {
+    return `
+      <div class="grid3" style="margin-top:10px;">
+        <div style="text-align:center;padding:8px 4px;background:var(--paper-dim);border-radius:6px;">
+          <div style="font-size:9.5px;color:#888;">TUNAI</div><div style="font-weight:700;font-size:12.5px;">${fmtRupiah(b.Tunai)}</div>
+        </div>
+        <div style="text-align:center;padding:8px 4px;background:var(--paper-dim);border-radius:6px;">
+          <div style="font-size:9.5px;color:#888;">QRIS</div><div style="font-weight:700;font-size:12.5px;">${fmtRupiah(b.QRIS)}</div>
+        </div>
+        <div style="text-align:center;padding:8px 4px;background:var(--paper-dim);border-radius:6px;">
+          <div style="font-size:9.5px;color:#888;">TRANSFER</div><div style="font-weight:700;font-size:12.5px;">${fmtRupiah(b.Transfer)}</div>
+        </div>
+      </div>
+      ${b['Belum Bayar'] > 0 ? `<div style="text-align:center;margin-top:6px;font-size:11px;color:var(--danger);">Belum Bayar: ${fmtRupiah(b['Belum Bayar'])}</div>` : ''}
     `;
   },
 
@@ -1307,18 +1425,29 @@ const app = {
       return `<Cell><Data ss:Type="String">${escXml(v)}</Data></Cell>`;
     };
 
+    const bayarBulan = { Tunai: 0, QRIS: 0, Transfer: 0, 'Belum Bayar': 0 };
+    trxBulan.forEach(t => {
+      if (t.statusBayar === 'Lunas' && t.metodeBayar) bayarBulan[t.metodeBayar] += t.total;
+      else bayarBulan['Belum Bayar'] += t.total;
+    });
+
     let rekapRows = `<Row>${cell('Bulan')}${cell(state._laporanBulan)}</Row>`;
     rekapRows += `<Row>${cell('Total Omzet')}${cell(trxBulan.reduce((a,b)=>a+b.total,0),'num')}</Row>`;
     rekapRows += `<Row>${cell('Jumlah Transaksi')}${cell(trxBulan.length,'num')}</Row>`;
+    rekapRows += `<Row></Row>`;
+    rekapRows += `<Row>${cell('Tunai')}${cell(bayarBulan.Tunai,'num')}</Row>`;
+    rekapRows += `<Row>${cell('QRIS')}${cell(bayarBulan.QRIS,'num')}</Row>`;
+    rekapRows += `<Row>${cell('Transfer')}${cell(bayarBulan.Transfer,'num')}</Row>`;
+    rekapRows += `<Row>${cell('Belum Bayar')}${cell(bayarBulan['Belum Bayar'],'num')}</Row>`;
 
     let kinerjaRows = `<Row>${cell('Kasir')}${cell('Jumlah Transaksi')}${cell('Total Omzet')}</Row>`;
     Object.entries(perKasir).forEach(([k,d]) => {
       kinerjaRows += `<Row>${cell(k)}${cell(d.jumlahTransaksi,'num')}${cell(d.totalOmzet,'num')}</Row>`;
     });
 
-    let dataRows = `<Row>${cell('Nota')}${cell('Tanggal Masuk')}${cell('Pelanggan')}${cell('Kasir')}${cell('Total')}${cell('Status Bayar')}${cell('Status Pesanan')}</Row>`;
+    let dataRows = `<Row>${cell('Nota')}${cell('Tanggal Masuk')}${cell('Pelanggan')}${cell('Kasir')}${cell('Total')}${cell('Status Bayar')}${cell('Metode Bayar')}${cell('Status Pesanan')}</Row>`;
     trxBulan.forEach(t => {
-      dataRows += `<Row>${cell(t.nota)}${cell(fmtTgl(t.tglMasuk))}${cell(t.pelanggan.nama)}${cell(t.kasir)}${cell(t.total,'num')}${cell(t.statusBayar)}${cell(t.statusPesanan)}</Row>`;
+      dataRows += `<Row>${cell(t.nota)}${cell(fmtTgl(t.tglMasuk))}${cell(t.pelanggan.nama)}${cell(t.kasir)}${cell(t.total,'num')}${cell(t.statusBayar)}${cell(t.metodeBayar||'-')}${cell(t.statusPesanan)}</Row>`;
     });
 
     const xml = `<?xml version="1.0"?>
