@@ -824,63 +824,89 @@ const app = {
     });
   },
 
+  // Helper: buat pasangan label-value. Kalau kepanjangan buat 1 baris (di lebar 384px),
+  // otomatis "ditumpuk" jadi 2 baris (label lalu value di bawahnya) supaya font besar tetap muat.
+  _makeField(ctx, width, label, value, size, opts = {}) {
+    const bold = opts.bold !== false;
+    ctx.font = `${bold ? 'bold ' : ''}${size}px 'Courier New', monospace`;
+    const valStr = value == null ? '' : String(value);
+    const labelW = ctx.measureText(label).width;
+    const valueW = ctx.measureText(valStr).width;
+    const available = width - 20;
+    if (labelW + valueW + 16 <= available) {
+      return [{ text: label, right: valStr, size, bold }];
+    }
+    return [
+      { text: label, size, bold },
+      { text: valStr, size, bold, indent: 14, wrap: true },
+    ];
+  },
+
   async drawStrukCanvas(trx) {
     const width = 384; // resolusi native printer thermal 58mm (203 DPI, ~384 dot)
-    const lineHeight = 26;
+    const lineHeight = 34;
+    const RULE_H = 20;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
     let lines = [];
-    lines.push({ text: `No Nota`, right: trx.nota, size: 17 });
-    lines.push({ text: `Pelanggan`, right: trx.pelanggan.nama, size: 17 });
-    if (trx.pelanggan.alamat) lines.push({ text: `Alamat`, right: trx.pelanggan.alamat, size: 15 });
-    lines.push({ text: `Tgl Masuk`, right: fmtTgl(trx.tglMasuk), size: 15 });
-    lines.push({ text: `Est Selesai`, right: fmtTgl(trx.estSelesai), size: 15 });
-    lines.push({ text: `Kasir`, right: trx.kasir, size: 17 });
-    lines.push({ text: `Parfum`, right: trx.parfum, size: 17 });
-    lines.push({ text: '----------------------------', size: 14, center: true });
+    const F = (label, value, size, opts) => this._makeField(ctx, width, label, value, size, opts);
+
+    lines.push(...F('No Nota', trx.nota, 26));
+    lines.push(...F('Pelanggan', trx.pelanggan.nama, 26));
+    if (trx.pelanggan.alamat) lines.push(...F('Alamat', trx.pelanggan.alamat, 22));
+    lines.push(...F('Tgl Masuk', fmtTgl(trx.tglMasuk), 22));
+    lines.push(...F('Est Selesai', fmtTgl(trx.estSelesai), 22));
+    lines.push(...F('Kasir', trx.kasir, 26));
+    lines.push(...F('Parfum', trx.parfum, 26));
+    lines.push({ rule: true });
     trx.items.forEach(item => {
       const sub = item.harga * item.qty * (item.promoActive ? item.promoFactor : 1);
       const qtyDisplay = item.satuan === 'KG' ? item.qty.toLocaleString('id-ID', {maximumFractionDigits:2}) : item.qty;
       const namaItem = item.isCustom ? item.catNama : `${item.varianLabel} (${item.catNama})`;
-      lines.push({ text: namaItem, size: 17, wrap: true });
-      lines.push({ text: `${qtyDisplay} ${item.satuan} x ${fmtRupiah(item.harga)}`, right: fmtRupiah(sub), size: 15, color: '#444' });
+      lines.push({ text: namaItem, size: 26, bold: true, wrap: true });
+      lines.push(...F(`${qtyDisplay} ${item.satuan} x ${fmtRupiah(item.harga)}`, fmtRupiah(sub), 22));
     });
-    lines.push({ text: '----------------------------', size: 14, center: true });
+    lines.push({ rule: true });
     if (trx.ongkir > 0) {
-      lines.push({ text: `Ongkir (Delivery Jauh)`, right: fmtRupiah(trx.ongkir), size: 16 });
+      lines.push(...F('Ongkir (Delivery Jauh)', fmtRupiah(trx.ongkir), 22));
     }
     const totalDiskon = (trx.subtotal + (trx.ongkir||0)) - trx.total;
     if (totalDiskon > 0) {
-      lines.push({ text: `Diskon`, right: '-' + fmtRupiah(totalDiskon), size: 16, color: '#b8562e' });
+      lines.push(...F('Diskon', '-' + fmtRupiah(totalDiskon), 22));
     }
-    lines.push({ text: `Status`, right: trx.statusBayar, size: 17 });
-    lines.push({ text: `Metode Bayar`, right: trx.metodeBayar || '-', size: 17 });
-    lines.push({ text: `TOTAL`, right: fmtRupiah(trx.total), size: 20, bold: true });
+    lines.push(...F('Status', trx.statusBayar, 26));
+    lines.push(...F('Metode Bayar', trx.metodeBayar || '-', 26));
+    lines.push({ rule: true });
+    lines.push({ text: `TOTAL`, right: fmtRupiah(trx.total), size: 34, bold: true });
     if (trx.catatan) {
-      lines.push({ text: '----------------------------', size: 14, center: true });
-      lines.push({ text: trx.catatan, size: 15, color: '#555', wrap: true });
+      lines.push({ rule: true });
+      lines.push({ text: trx.catatan, size: 22, bold: true, wrap: true });
     }
-    lines.push({ text: '----------------------------', size: 14, center: true });
-    lines.push({ text: 'Struk ini wajib dibawa saat pengambilan', size: 14, center: true, color: '#555', wrap: true });
-    lines.push({ text: 'Terima kasih telah menggunakan Naufal Laundry.', size: 14, center: true, color: '#555', wrap: true });
-    lines.push({ text: 'Info & pemesanan: 0821-1975-6778', size: 14, center: true, color: '#555' });
-    lines.push({ text: 'Instagram: @naufallaundry.bdg', size: 14, center: true, color: '#555' });
+    lines.push({ rule: true });
+    lines.push({ text: 'Struk ini wajib dibawa saat pengambilan', size: 20, bold: true, center: true, wrap: true });
+    lines.push({ text: 'Terima kasih telah menggunakan Naufal Laundry.', size: 20, bold: true, center: true, wrap: true });
+    lines.push({ text: 'Info & pemesanan: 0821-1975-6778', size: 20, bold: true, center: true, wrap: true });
+    lines.push({ text: 'Instagram: @naufallaundry.bdg', size: 20, bold: true, center: true, wrap: true });
 
     const logoImg = await this.getLogoImg();
-    const logoW = 170;
+    const logoW = 200;
     const logoH = logoImg ? Math.round(logoW * logoImg.height / logoImg.width) : 0;
 
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    let totalHeight = logoH + 44;
+    let totalHeight = logoH + 50;
     const measuredLines = [];
     lines.forEach(l => {
+      if (l.rule) { measuredLines.push(l); totalHeight += RULE_H; return; }
       ctx.font = `${l.bold ? 'bold' : ''} ${l.size}px Courier New`;
       if (l.wrap) {
+        const maxW = width - 20 - (l.indent || 0);
         const words = l.text.split(' ');
         let cur = '';
         const wrapped = [];
         words.forEach(w => {
           const test = cur ? cur + ' ' + w : w;
-          if (ctx.measureText(test).width > width - 20) {
+          if (ctx.measureText(test).width > maxW) {
             wrapped.push(cur);
             cur = w;
           } else cur = test;
@@ -892,7 +918,7 @@ const app = {
         totalHeight += lineHeight;
       }
     });
-    totalHeight += 44;
+    totalHeight += 20;
 
     // Render native (tanpa scale 2x) supaya lebar canvas persis 384px sesuai resolusi printer 58mm
     canvas.width = width;
@@ -903,31 +929,42 @@ const app = {
     let y = 16;
     if (logoImg) {
       ctx.drawImage(logoImg, width/2 - logoW/2, y, logoW, logoH);
-      y += logoH + 10;
+      y += logoH + 12;
     } else {
       y += 10;
     }
-    ctx.font = '13px sans-serif';
-    ctx.fillStyle = '#666';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillStyle = '#000000';
     ctx.textAlign = 'center';
     ctx.fillText('Jl. Ahmad No. 9, Pamoyanan, Cicendo, Bandung', width/2, y);
-    y += 24;
+    y += 28;
 
     ctx.textAlign = 'left';
     measuredLines.forEach(l => {
+      if (l.rule) {
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(10, y - RULE_H/2 + 4);
+        ctx.lineTo(width - 10, y - RULE_H/2 + 4);
+        ctx.stroke();
+        y += RULE_H;
+        return;
+      }
       ctx.font = `${l.bold ? 'bold' : ''} ${l.size}px 'Courier New', monospace`;
-      ctx.fillStyle = l.color || '#222';
+      ctx.fillStyle = '#000000';
+      const xBase = 10 + (l.indent || 0);
       if (l.center) {
         ctx.textAlign = 'center';
         ctx.fillText(l.text, width/2, y);
         ctx.textAlign = 'left';
       } else if (l.right !== undefined) {
-        ctx.fillText(l.text, 10, y);
+        ctx.fillText(l.text, xBase, y);
         ctx.textAlign = 'right';
         ctx.fillText(l.right, width - 10, y);
         ctx.textAlign = 'left';
       } else {
-        ctx.fillText(l.text, 10, y);
+        ctx.fillText(l.text, xBase, y);
       }
       y += lineHeight;
     });
@@ -985,54 +1022,58 @@ const app = {
 
   async drawStrukInternalCanvas(trx) {
     const width = 384; // resolusi native printer thermal 58mm
-    const lineHeight = 26;
-
-    // Baris SEBELUM nama besar (No Nota)
-    let preLines = [];
-    preLines.push({ text: `No Nota`, right: trx.nota, size: 15 });
-
-    // Baris SETELAH nama besar
-    let postLines = [];
-    postLines.push({ text: `Tgl Masuk`, right: fmtTgl(trx.tglMasuk), size: 14 });
-    postLines.push({ text: `Est Selesai`, right: fmtTgl(trx.estSelesai), size: 14 });
-    postLines.push({ text: `Kasir`, right: trx.kasir, size: 14 });
-    postLines.push({ text: `Parfum`, right: trx.parfum, size: 14 });
-    postLines.push({ text: '----------------------------', size: 13, center: true });
-    postLines.push({ text: 'DAFTAR ITEM (untuk proses cuci):', size: 15, bold: true, wrap: true });
-    trx.items.forEach(item => {
-      const qtyDisplay = item.satuan === 'KG' ? item.qty.toLocaleString('id-ID', {maximumFractionDigits:2}) : item.qty;
-      const namaItem = item.isCustom ? item.catNama : `${item.varianLabel} (${item.catNama})`;
-      postLines.push({ text: `• ${namaItem} — ${qtyDisplay} ${item.satuan}`, size: 16, wrap: true });
-    });
-    postLines.push({ text: '----------------------------', size: 13, center: true });
-    if (trx.catatan) {
-      postLines.push({ text: 'CATATAN / INSTRUKSI KHUSUS:', size: 15, bold: true, color: '#b8562e', wrap: true });
-      postLines.push({ text: trx.catatan, size: 15.5, color: '#222', wrap: true, bold: true });
-    } else {
-      postLines.push({ text: 'Tidak ada catatan khusus.', size: 14, color: '#999' });
-    }
-    postLines.push({ text: '----------------------------', size: 13, center: true });
-    postLines.push({ text: '(Struk internal - tanpa harga, untuk tim cuci)', size: 12, center: true, color: '#999', wrap: true });
-
-    const logoImg = await this.getLogoImg();
-    const logoW = 130;
-    const logoH = logoImg ? Math.round(logoW * logoImg.height / logoImg.width) : 0;
+    const lineHeight = 32;
+    const RULE_H = 20;
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
+    const F = (label, value, size, opts) => this._makeField(ctx, width, label, value, size, opts);
+
+    // Baris SEBELUM nama besar (No Nota)
+    let preLines = [];
+    preLines.push(...F('No Nota', trx.nota, 22));
+
+    // Baris SETELAH nama besar
+    let postLines = [];
+    postLines.push(...F('Tgl Masuk', fmtTgl(trx.tglMasuk), 20));
+    postLines.push(...F('Est Selesai', fmtTgl(trx.estSelesai), 20));
+    postLines.push(...F('Kasir', trx.kasir, 24));
+    postLines.push(...F('Parfum', trx.parfum, 24));
+    postLines.push({ rule: true });
+    postLines.push({ text: 'DAFTAR ITEM (untuk proses cuci):', size: 22, bold: true, wrap: true });
+    trx.items.forEach(item => {
+      const qtyDisplay = item.satuan === 'KG' ? item.qty.toLocaleString('id-ID', {maximumFractionDigits:2}) : item.qty;
+      const namaItem = item.isCustom ? item.catNama : `${item.varianLabel} (${item.catNama})`;
+      postLines.push({ text: `• ${namaItem} — ${qtyDisplay} ${item.satuan}`, size: 24, bold: true, wrap: true });
+    });
+    postLines.push({ rule: true });
+    if (trx.catatan) {
+      postLines.push({ text: 'CATATAN / INSTRUKSI KHUSUS:', size: 22, bold: true, wrap: true });
+      postLines.push({ text: trx.catatan, size: 24, bold: true, wrap: true });
+    } else {
+      postLines.push({ text: 'Tidak ada catatan khusus.', size: 20, bold: true });
+    }
+    postLines.push({ rule: true });
+    postLines.push({ text: '(Struk internal - tanpa harga, untuk tim cuci)', size: 16, bold: true, center: true, wrap: true });
+
+    const logoImg = await this.getLogoImg();
+    const logoW = 160;
+    const logoH = logoImg ? Math.round(logoW * logoImg.height / logoImg.width) : 0;
 
     const measureWrap = (linesArr) => {
       const measured = [];
       let h = 0;
       linesArr.forEach(l => {
+        if (l.rule) { measured.push(l); h += RULE_H; return; }
         ctx.font = `${l.bold ? 'bold' : ''} ${l.size}px Courier New`;
         if (l.wrap) {
+          const maxW = width - 20 - (l.indent || 0);
           const words = l.text.split(' ');
           let cur = '';
           const wrapped = [];
           words.forEach(w => {
             const test = cur ? cur + ' ' + w : w;
-            if (ctx.measureText(test).width > width - 20) {
+            if (ctx.measureText(test).width > maxW) {
               wrapped.push(cur);
               cur = w;
             } else cur = test;
@@ -1051,7 +1092,7 @@ const app = {
     const postM = measureWrap(postLines);
 
     // Ukur tinggi nama besar (bisa wrap kalau nama kepanjangan)
-    const namaFontSize = 30;
+    const namaFontSize = 44;
     ctx.font = `bold ${namaFontSize}px 'Courier New', monospace`;
     const namaWords = trx.pelanggan.nama.split(' ');
     let namaCur = '';
@@ -1064,10 +1105,10 @@ const app = {
       } else namaCur = test;
     });
     if (namaCur) namaWrapped.push(namaCur);
-    const namaLineHeight = 38;
-    const namaBlockHeight = namaWrapped.length * namaLineHeight + 20; // padding atas-bawah
+    const namaLineHeight = 54;
+    const namaBlockHeight = namaWrapped.length * namaLineHeight + 24; // padding atas-bawah
 
-    let totalHeight = logoH + 36 + preM.h + namaBlockHeight + postM.h + 30;
+    let totalHeight = logoH + 40 + preM.h + namaBlockHeight + postM.h + 30;
 
     // Render native (tanpa scale 2x) supaya lebar canvas persis 384px sesuai resolusi printer 58mm
     canvas.width = width;
@@ -1078,26 +1119,37 @@ const app = {
     let y = 16;
     if (logoImg) {
       ctx.drawImage(logoImg, width/2 - logoW/2, y, logoW, logoH);
-      y += logoH + 6;
+      y += logoH + 8;
     }
-    ctx.textAlign = 'center'; ctx.font = 'bold 15px sans-serif'; ctx.fillStyle = '#8a4a1e';
-    ctx.fillText('STRUK INTERNAL — TIM CUCI', width/2, y + 13);
-    y += 30;
+    ctx.textAlign = 'center'; ctx.font = 'bold 20px sans-serif'; ctx.fillStyle = '#000000';
+    ctx.fillText('STRUK INTERNAL — TIM CUCI', width/2, y + 16);
+    y += 34;
 
     const drawLine = (l) => {
+      if (l.rule) {
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(10, y - RULE_H/2 + 4);
+        ctx.lineTo(width - 10, y - RULE_H/2 + 4);
+        ctx.stroke();
+        y += RULE_H;
+        return;
+      }
       ctx.font = `${l.bold ? 'bold' : ''} ${l.size}px 'Courier New', monospace`;
-      ctx.fillStyle = l.color || '#222';
+      ctx.fillStyle = '#000000';
+      const xBase = 10 + (l.indent || 0);
       if (l.center) {
         ctx.textAlign = 'center';
         ctx.fillText(l.text, width/2, y);
         ctx.textAlign = 'left';
       } else if (l.right !== undefined) {
-        ctx.fillText(l.text, 10, y);
+        ctx.fillText(l.text, xBase, y);
         ctx.textAlign = 'right';
         ctx.fillText(l.right, width - 10, y);
         ctx.textAlign = 'left';
       } else {
-        ctx.fillText(l.text, 10, y);
+        ctx.fillText(l.text, xBase, y);
       }
       y += lineHeight;
     };
@@ -1106,17 +1158,18 @@ const app = {
 
     // Nama pelanggan BESAR di tengah, biar gampang di-scan visual saat sortir cucian
     y += 8;
-    ctx.strokeStyle = '#ddd'; ctx.beginPath(); ctx.moveTo(10, y - lineHeight/2 - 2); ctx.lineTo(width - 10, y - lineHeight/2 - 2); ctx.stroke();
-    ctx.textAlign = 'center'; ctx.fillStyle = '#1a1a1a';
+    ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(10, y - lineHeight/2 - 2); ctx.lineTo(width - 10, y - lineHeight/2 - 2); ctx.stroke();
+    ctx.textAlign = 'center'; ctx.fillStyle = '#000000';
     ctx.font = `bold ${namaFontSize}px 'Courier New', monospace`;
     namaWrapped.forEach(w => {
-      ctx.fillText(w, width/2, y + namaLineHeight - 8);
+      ctx.fillText(w, width/2, y + namaLineHeight - 10);
       y += namaLineHeight;
     });
     y += 8;
-    ctx.strokeStyle = '#ddd'; ctx.beginPath(); ctx.moveTo(10, y - 4); ctx.lineTo(width - 10, y - 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(10, y - 4); ctx.lineTo(width - 10, y - 4); ctx.stroke();
     ctx.textAlign = 'left';
-    y += 14;
+    y += 16;
 
     postM.measured.forEach(drawLine);
 
