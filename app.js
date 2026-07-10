@@ -799,7 +799,11 @@ const app = {
         <button class="btn btn-outline" onclick="app.downloadStruk('${trx.id}')">💾 Simpan Gambar</button>
         <button class="btn btn-gold" onclick="app.shareStrukWA('${trx.id}')">📱 Kirim WA</button>
       </div>
-      <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="app.downloadStrukInternal('${trx.id}')">🧵 Cetak Struk Internal (Tim Cuci)</button>
+      <button class="btn btn-gold btn-block" style="margin-top:8px;" onclick="app.cetakStrukPrinter('${trx.id}', false)">🖨️ Cetak ke Printer Thermal</button>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn btn-outline" onclick="app.downloadStrukInternal('${trx.id}')">🧵 Struk Internal</button>
+        <button class="btn btn-outline" onclick="app.cetakStrukPrinter('${trx.id}', true)">🖨️ Print Internal</button>
+      </div>
       <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="app.closeModal(); app.renderTab();">Selesai</button>
     `;
     this.openModal(html);
@@ -821,25 +825,25 @@ const app = {
   },
 
   async drawStrukCanvas(trx) {
-    const width = 380;
+    const width = 384; // resolusi native printer thermal 58mm (203 DPI, ~384 dot)
     const lineHeight = 20;
     let lines = [];
-    lines.push({ text: `No Nota`, right: trx.nota, size: 12.5 });
-    lines.push({ text: `Pelanggan`, right: trx.pelanggan.nama, size: 12.5 });
-    if (trx.pelanggan.alamat) lines.push({ text: `Alamat`, right: trx.pelanggan.alamat, size: 11 });
-    lines.push({ text: `Tgl Masuk`, right: fmtTgl(trx.tglMasuk), size: 12.5 });
-    lines.push({ text: `Est Selesai`, right: fmtTgl(trx.estSelesai), size: 12.5 });
-    lines.push({ text: `Kasir`, right: trx.kasir, size: 12.5 });
-    lines.push({ text: `Parfum`, right: trx.parfum, size: 12.5 });
-    lines.push({ text: '------------------------------------------', size: 11, center: true });
+    lines.push({ text: `No Nota`, right: trx.nota, size: 13 });
+    lines.push({ text: `Pelanggan`, right: trx.pelanggan.nama, size: 13 });
+    if (trx.pelanggan.alamat) lines.push({ text: `Alamat`, right: trx.pelanggan.alamat, size: 11.5 });
+    lines.push({ text: `Tgl Masuk`, right: fmtTgl(trx.tglMasuk), size: 12 });
+    lines.push({ text: `Est Selesai`, right: fmtTgl(trx.estSelesai), size: 12 });
+    lines.push({ text: `Kasir`, right: trx.kasir, size: 13 });
+    lines.push({ text: `Parfum`, right: trx.parfum, size: 13 });
+    lines.push({ text: '----------------------------------------', size: 11, center: true });
     trx.items.forEach(item => {
       const sub = item.harga * item.qty * (item.promoActive ? item.promoFactor : 1);
       const qtyDisplay = item.satuan === 'KG' ? item.qty.toLocaleString('id-ID', {maximumFractionDigits:2}) : item.qty;
       const namaItem = item.isCustom ? item.catNama : `${item.varianLabel} (${item.catNama})`;
-      lines.push({ text: namaItem, size: 12.5 });
+      lines.push({ text: namaItem, size: 13, wrap: true });
       lines.push({ text: `${qtyDisplay} ${item.satuan} x ${fmtRupiah(item.harga)}`, right: fmtRupiah(sub), size: 12, color: '#444' });
     });
-    lines.push({ text: '------------------------------------------', size: 11, center: true });
+    lines.push({ text: '----------------------------------------', size: 11, center: true });
     if (trx.ongkir > 0) {
       lines.push({ text: `Ongkir (Delivery Jauh)`, right: fmtRupiah(trx.ongkir), size: 12.5 });
     }
@@ -847,21 +851,21 @@ const app = {
     if (totalDiskon > 0) {
       lines.push({ text: `Diskon`, right: '-' + fmtRupiah(totalDiskon), size: 12.5, color: '#b8562e' });
     }
-    lines.push({ text: `Status`, right: trx.statusBayar, size: 12.5 });
-    lines.push({ text: `Metode Bayar`, right: trx.metodeBayar || '-', size: 12.5 });
-    lines.push({ text: `TOTAL`, right: fmtRupiah(trx.total), size: 15, bold: true });
+    lines.push({ text: `Status`, right: trx.statusBayar, size: 13 });
+    lines.push({ text: `Metode Bayar`, right: trx.metodeBayar || '-', size: 13 });
+    lines.push({ text: `TOTAL`, right: fmtRupiah(trx.total), size: 16, bold: true });
     if (trx.catatan) {
-      lines.push({ text: '------------------------------------------', size: 11, center: true });
-      lines.push({ text: trx.catatan, size: 11, color: '#555', wrap: true });
+      lines.push({ text: '----------------------------------------', size: 11, center: true });
+      lines.push({ text: trx.catatan, size: 11.5, color: '#555', wrap: true });
     }
-    lines.push({ text: '------------------------------------------', size: 11, center: true });
-    lines.push({ text: 'Struk ini wajib dibawa saat pengambilan', size: 10.5, center: true, color: '#555' });
-    lines.push({ text: 'Terima kasih telah menggunakan Naufal Laundry.', size: 10.5, center: true, color: '#555' });
-    lines.push({ text: 'Info & pemesanan: 0821-1975-6778', size: 10.5, center: true, color: '#555' });
-    lines.push({ text: 'Instagram: @naufallaundry.bdg', size: 10.5, center: true, color: '#555' });
+    lines.push({ text: '----------------------------------------', size: 11, center: true });
+    lines.push({ text: 'Struk ini wajib dibawa saat pengambilan', size: 11, center: true, color: '#555', wrap: true });
+    lines.push({ text: 'Terima kasih telah menggunakan Naufal Laundry.', size: 11, center: true, color: '#555', wrap: true });
+    lines.push({ text: 'Info & pemesanan: 0821-1975-6778', size: 11, center: true, color: '#555' });
+    lines.push({ text: 'Instagram: @naufallaundry.bdg', size: 11, center: true, color: '#555' });
 
     const logoImg = await this.getLogoImg();
-    const logoW = 170;
+    const logoW = 150;
     const logoH = logoImg ? Math.round(logoW * logoImg.height / logoImg.width) : 0;
 
     const canvas = document.createElement('canvas');
@@ -876,7 +880,7 @@ const app = {
         const wrapped = [];
         words.forEach(w => {
           const test = cur ? cur + ' ' + w : w;
-          if (ctx.measureText(test).width > width - 40) {
+          if (ctx.measureText(test).width > width - 24) {
             wrapped.push(cur);
             cur = w;
           } else cur = test;
@@ -890,11 +894,9 @@ const app = {
     });
     totalHeight += 40;
 
-    canvas.width = width * 2;
-    canvas.height = totalHeight * 2;
-    canvas.style.width = width + 'px';
-    canvas.style.height = totalHeight + 'px';
-    ctx.scale(2, 2);
+    // Render native (tanpa scale 2x) supaya lebar canvas persis 384px sesuai resolusi printer 58mm
+    canvas.width = width;
+    canvas.height = totalHeight;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, totalHeight);
 
@@ -909,7 +911,7 @@ const app = {
     ctx.fillStyle = '#666';
     ctx.textAlign = 'center';
     ctx.fillText('Jl. Ahmad No. 9, Pamoyanan, Cicendo, Bandung', width/2, y);
-    y += 22;
+    y += 20;
 
     ctx.textAlign = 'left';
     measuredLines.forEach(l => {
@@ -920,12 +922,12 @@ const app = {
         ctx.fillText(l.text, width/2, y);
         ctx.textAlign = 'left';
       } else if (l.right !== undefined) {
-        ctx.fillText(l.text, 20, y);
+        ctx.fillText(l.text, 12, y);
         ctx.textAlign = 'right';
-        ctx.fillText(l.right, width - 20, y);
+        ctx.fillText(l.right, width - 12, y);
         ctx.textAlign = 'left';
       } else {
-        ctx.fillText(l.text, 20, y);
+        ctx.fillText(l.text, 12, y);
       }
       y += lineHeight;
     });
@@ -937,24 +939,52 @@ const app = {
     const trx = this.findTrx(trxId);
     const canvas = await this.drawStrukCanvas(trx);
     const link = document.createElement('a');
-    link.download = `Struk_${trx.nota}.png`;
+    link.download = `Struk_${trx.nota.replace(/[^a-zA-Z0-9]/g, '')}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
     toast('Struk tersimpan');
+  },
+
+  // Cetak ke printer thermal via Web Share API — membuka picker share Android,
+  // di situ kasir pilih app printer thermal (RPP02/Bluetooth Print/dll) yang sudah terpasang.
+  async cetakStrukPrinter(trxId, internal) {
+    const trx = this.findTrx(trxId);
+    if (!trx) return;
+    const canvas = internal ? await this.drawStrukInternalCanvas(trx) : await this.drawStrukCanvas(trx);
+
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const fileName = `Struk_${trx.nota.replace(/[^a-zA-Z0-9]/g, '')}.png`;
+    const file = new File([blob], fileName, { type: 'image/png' });
+
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: `Struk ${trx.nota}` });
+        return;
+      } catch (e) {
+        // kalau user cancel share, jangan tampilkan error, cukup diam
+        if (e.name === 'AbortError') return;
+      }
+    }
+    // Fallback: browser/perangkat tidak dukung Web Share API dengan file
+    toast('Share ke printer tidak didukung, gambar disimpan sebagai gantinya');
+    const link = document.createElement('a');
+    link.download = fileName;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
   },
 
   async downloadStrukInternal(trxId) {
     const trx = this.findTrx(trxId);
     const canvas = await this.drawStrukInternalCanvas(trx);
     const link = document.createElement('a');
-    link.download = `StrukInternal_${trx.nota}.png`;
+    link.download = `StrukInternal_${trx.nota.replace(/[^a-zA-Z0-9]/g, '')}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
     toast('Struk internal tersimpan');
   },
 
   async drawStrukInternalCanvas(trx) {
-    const width = 380;
+    const width = 384; // resolusi native printer thermal 58mm
     const lineHeight = 22;
     let lines = [];
     lines.push({ text: `No Nota`, right: trx.nota, size: 14, bold: true });
@@ -962,25 +992,25 @@ const app = {
     lines.push({ text: `Kasir`, right: trx.kasir, size: 12 });
     lines.push({ text: `Parfum`, right: trx.parfum, size: 12 });
     lines.push({ text: `Est Selesai`, right: fmtTgl(trx.estSelesai), size: 12 });
-    lines.push({ text: '------------------------------------------', size: 11, center: true });
-    lines.push({ text: 'DAFTAR ITEM (untuk proses cuci):', size: 12, bold: true });
+    lines.push({ text: '----------------------------------------', size: 11, center: true });
+    lines.push({ text: 'DAFTAR ITEM (untuk proses cuci):', size: 12, bold: true, wrap: true });
     trx.items.forEach(item => {
       const qtyDisplay = item.satuan === 'KG' ? item.qty.toLocaleString('id-ID', {maximumFractionDigits:2}) : item.qty;
       const namaItem = item.isCustom ? item.catNama : `${item.varianLabel} (${item.catNama})`;
-      lines.push({ text: `• ${namaItem} — ${qtyDisplay} ${item.satuan}`, size: 13 });
+      lines.push({ text: `• ${namaItem} — ${qtyDisplay} ${item.satuan}`, size: 13, wrap: true });
     });
-    lines.push({ text: '------------------------------------------', size: 11, center: true });
+    lines.push({ text: '----------------------------------------', size: 11, center: true });
     if (trx.catatan) {
-      lines.push({ text: 'CATATAN / INSTRUKSI KHUSUS:', size: 12, bold: true, color: '#b8562e' });
+      lines.push({ text: 'CATATAN / INSTRUKSI KHUSUS:', size: 12, bold: true, color: '#b8562e', wrap: true });
       lines.push({ text: trx.catatan, size: 12.5, color: '#222', wrap: true, bold: true });
     } else {
       lines.push({ text: 'Tidak ada catatan khusus.', size: 11.5, color: '#999' });
     }
-    lines.push({ text: '------------------------------------------', size: 11, center: true });
-    lines.push({ text: '(Struk internal - tanpa harga, untuk tim cuci)', size: 9.5, center: true, color: '#999' });
+    lines.push({ text: '----------------------------------------', size: 11, center: true });
+    lines.push({ text: '(Struk internal - tanpa harga, untuk tim cuci)', size: 9.5, center: true, color: '#999', wrap: true });
 
     const logoImg = await this.getLogoImg();
-    const logoW = 130;
+    const logoW = 120;
     const logoH = logoImg ? Math.round(logoW * logoImg.height / logoImg.width) : 0;
 
     const canvas = document.createElement('canvas');
@@ -995,7 +1025,7 @@ const app = {
         const wrapped = [];
         words.forEach(w => {
           const test = cur ? cur + ' ' + w : w;
-          if (ctx.measureText(test).width > width - 40) {
+          if (ctx.measureText(test).width > width - 24) {
             wrapped.push(cur);
             cur = w;
           } else cur = test;
@@ -1009,11 +1039,9 @@ const app = {
     });
     totalHeight += 24;
 
-    canvas.width = width * 2;
-    canvas.height = totalHeight * 2;
-    canvas.style.width = width + 'px';
-    canvas.style.height = totalHeight + 'px';
-    ctx.scale(2, 2);
+    // Render native (tanpa scale 2x) supaya lebar canvas persis 384px sesuai resolusi printer 58mm
+    canvas.width = width;
+    canvas.height = totalHeight;
     ctx.fillStyle = '#fffdf5';
     ctx.fillRect(0, 0, width, totalHeight);
 
@@ -1035,9 +1063,9 @@ const app = {
         ctx.fillText(l.text, width/2, y);
         ctx.textAlign = 'left';
       } else if (l.right !== undefined) {
-        ctx.fillText(l.text, 20, y);
+        ctx.fillText(l.text, 12, y);
         ctx.textAlign = 'right';
-        ctx.fillText(l.right, width - 20, y);
+        ctx.fillText(l.right, width - 12, y);
         ctx.textAlign = 'left';
       } else {
         ctx.fillText(l.text, 20, y);
@@ -1063,7 +1091,7 @@ const app = {
           <body style="margin:0;background:#111;display:flex;flex-direction:column;align-items:center;padding:20px;font-family:sans-serif;">
             <p style="color:#fff;">Simpan gambar ini, lalu kirim manual via WhatsApp.</p>
             <img src="${url}" style="max-width:100%;border-radius:8px;">
-            <a href="${url}" download="Struk_${trx.nota}.png" style="margin-top:12px;padding:12px 20px;background:#25D366;color:#fff;text-decoration:none;border-radius:8px;">Download Gambar</a>
+            <a href="${url}" download="Struk_${trx.nota.replace(/[^a-zA-Z0-9]/g, '')}.png" style="margin-top:12px;padding:12px 20px;background:#25D366;color:#fff;text-decoration:none;border-radius:8px;">Download Gambar</a>
             <a href="${waUrl}" target="_blank" style="margin-top:8px;padding:12px 20px;background:#128C7E;color:#fff;text-decoration:none;border-radius:8px;">Buka WhatsApp</a>
           </body></html>
         `);
@@ -1203,8 +1231,16 @@ const app = {
     const filtered = q
       ? list.filter(t => t.nota.toLowerCase().includes(q) || t.pelanggan.nama.toLowerCase().includes(q))
       : list;
+    const alreadyImported = localStorage.getItem('nl_legacy_imported') === 'true';
+    const hasLegacyData = typeof LEGACY_TRANSAKSI !== 'undefined' && LEGACY_TRANSAKSI.length > 0;
 
     main.innerHTML = `
+      ${(hasLegacyData && !alreadyImported) ? `
+      <div class="card" style="background:#eaf2fb;border-color:var(--info);">
+        <h2 style="color:var(--info);">📥 Import Data Histori Kasmini</h2>
+        <p style="font-size:12px;color:#555;margin-top:0;">Tersedia ${LEGACY_TRANSAKSI.length} transaksi dan ${LEGACY_PELANGGAN.length} data pelanggan dari histori Kasmini (31 hari terakhir). Data ini belum diimpor ke sistem.</p>
+        <button class="btn btn-gold btn-block" onclick="app.confirmImportLegacy()">Import Sekarang</button>
+      </div>` : ''}
       <div class="card">
         <h2>Riwayat Transaksi <span class="badge-count">${list.length}</span></h2>
         <input type="text" placeholder="Cari no. nota atau nama pelanggan..." value="${esc(state._riwayatSearch||'')}"
@@ -1218,6 +1254,38 @@ const app = {
         ${filtered.length > 50 ? `<div style="text-align:center;font-size:11px;color:#999;margin-top:8px;">Menampilkan 50 transaksi terbaru dari ${filtered.length}. Gunakan pencarian untuk hasil lebih spesifik.</div>` : ''}
       </div>
     `;
+  },
+
+  confirmImportLegacy() {
+    const html = `
+      <div class="modal-header"><h3>Import Data Histori?</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <p style="font-size:13px;color:#555;">Ini akan menambahkan <strong>${LEGACY_TRANSAKSI.length} transaksi</strong> dan <strong>${LEGACY_PELANGGAN.length} data pelanggan</strong> dari histori Kasmini ke sistem.</p>
+      <p style="font-size:12px;color:#888;">Catatan: semua transaksi lama ditandai kasir "Hera", dan transaksi yang statusnya lunas ditandai metode bayar "Tidak diketahui" (karena tidak tercatat di data asal). Proses ini aman dijalankan sekali dan tidak akan menduplikasi data jika diulang.</p>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn btn-outline" onclick="app.closeModal()">Batal</button>
+        <button class="btn btn-gold" onclick="app.importLegacyData()">Ya, Import</button>
+      </div>
+    `;
+    this.openModal(html);
+  },
+
+  importLegacyData() {
+    const existingTrx = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
+    const existingIds = new Set(existingTrx.map(t => t.id));
+    const newTrx = LEGACY_TRANSAKSI.filter(t => !existingIds.has(t.id));
+    const merged = existingTrx.concat(newTrx);
+    saveJSON(STORAGE_KEYS.TRANSAKSI, merged);
+
+    const existingPel = loadJSON(STORAGE_KEYS.PELANGGAN, []);
+    const existingNames = new Set(existingPel.map(p => p.nama.toLowerCase()));
+    const newPel = LEGACY_PELANGGAN.filter(p => !existingNames.has(p.nama.toLowerCase()));
+    const mergedPel = existingPel.concat(newPel);
+    saveJSON(STORAGE_KEYS.PELANGGAN, mergedPel);
+
+    localStorage.setItem('nl_legacy_imported', 'true');
+    this.closeModal();
+    this.renderTab();
+    toast(`${newTrx.length} transaksi & ${newPel.length} pelanggan diimpor`);
   },
 
   renderRiwayatRow(t) {
