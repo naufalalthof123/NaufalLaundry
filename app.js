@@ -1018,9 +1018,16 @@ const app = {
     if (!trx) return;
     const canvas = internal ? await this.drawStrukInternalCanvas(trx) : await this.drawStrukCanvas(trx);
 
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-    const fileName = `Struk_${trx.nota.replace(/[^a-zA-Z0-9]/g, '')}.png`;
-    const file = new File([blob], fileName, { type: 'image/png' });
+    // Bikin PDF dengan ukuran fisik eksplisit (bukan PNG mentah), supaya app printer (Thermer/dst)
+    // gak perlu nebak-nebak DPI dan salah scale gambar kita. 384px canvas kita = lebar cetak
+    // standar printer thermal 58mm (area cetak sebenarnya ~48mm / 384 dot @203dpi).
+    const MM_TO_PT = 72 / 25.4;
+    const widthPt = 48 * MM_TO_PT; // ~136 pt = lebar cetak printer thermal 58mm
+    const heightPt = widthPt * (canvas.height / canvas.width); // jaga rasio biar gak gepeng/molor
+
+    const pdfBlob = await this.canvasToPdfBlob(canvas, widthPt, heightPt);
+    const fileName = `Struk_${trx.nota.replace(/[^a-zA-Z0-9]/g, '')}.pdf`;
+    const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
 
     if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
       try {
@@ -1032,10 +1039,10 @@ const app = {
       }
     }
     // Fallback: browser/perangkat tidak dukung Web Share API dengan file
-    toast('Share ke printer tidak didukung, gambar disimpan sebagai gantinya');
+    toast('Share ke printer tidak didukung, PDF disimpan sebagai gantinya');
     const link = document.createElement('a');
     link.download = fileName;
-    link.href = canvas.toDataURL('image/png');
+    link.href = URL.createObjectURL(pdfBlob);
     link.click();
   },
 
@@ -1904,14 +1911,14 @@ const app = {
 
       <div class="card">
         <h2>📥 Laporan Masuk Laundry — ${esc(fmtHari(this.parseInputDate(tglStr)))}, ${tglStr}</h2>
-        ${this.renderLaporanTable(masuk, 'masuk')}
+        ${this.renderLaporanTable(masuk, 'masuk', tglStr)}
         ${this.renderBayarBreakdown(bayarMasuk)}
         <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Pemasukan (Lunas): ${fmtRupiah(totalMasuk)}</div>
       </div>
 
       <div class="card">
         <h2>📤 Laporan Keluar Laundry — ${esc(fmtHari(this.parseInputDate(tglStr)))}, ${tglStr}</h2>
-        ${this.renderLaporanTable(keluar, 'keluar')}
+        ${this.renderLaporanTable(keluar, 'keluar', tglStr)}
         ${this.renderBayarBreakdown(bayarKeluar)}
         <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Diambil (Lunas): ${fmtRupiah(totalKeluar)}</div>
       </div>
@@ -1984,7 +1991,7 @@ const app = {
     return 'Belum Bayar';
   },
 
-  renderLaporanTable(rows, kind) {
+  renderLaporanTable(rows, kind, tglStr) {
     if (rows.length === 0) return `<div class="empty-state">Tidak ada transaksi.</div>`;
     return `
       <div style="overflow-x:auto;">
@@ -1996,7 +2003,9 @@ const app = {
         ${rows.map((t, i) => {
           const jenisSet = [...new Set(t.items.map(it => it.jenisCuci))].join('/');
           const levelSet = [...new Set(t.items.map(it => LEVEL_LABEL[it.level]))].join('/');
-          const rowBg = t.statusBayar === 'Lunas' ? 'background:#e8f5ec;' : '';
+          const lunasHariIni = t.statusBayar === 'Lunas' && t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr;
+          const lunasHariLain = t.statusBayar === 'Lunas' && !lunasHariIni;
+          const rowBg = lunasHariIni ? 'background:#e8f5ec;' : (lunasHariLain ? 'background:#fdf0e3;' : '');
           return `<tr style="${rowBg}">
             <td style="padding:5px;border-top:1px solid var(--line);text-align:center;">${i+1}</td>
             <td style="padding:5px;border-top:1px solid var(--line);">${esc(t.nota)}</td>
@@ -2046,7 +2055,7 @@ const app = {
     return y + 40 + 14;
   },
 
-  _drawTrxTable(ctx, width, y, rows) {
+  _drawTrxTable(ctx, width, y, rows, tglStr) {
     const rowH = 24;
     const cols = [
       {label:'No', w:32, align:'center'},
@@ -2076,8 +2085,13 @@ const app = {
       const jenisSet = [...new Set(t.items.map(it => it.jenisCuci))].join('/');
       const levelSet = [...new Set(t.items.map(it => LEVEL_LABEL[it.level]))].join('/');
       const vals = [String(i+1), t.nota, t.pelanggan.nama, jenisSet, levelSet, fmtRupiah(t.total), this._bayarDisplayText(t)];
-      if (t.statusBayar === 'Lunas') {
+      const lunasHariIni = t.statusBayar === 'Lunas' && t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr;
+      const lunasHariLain = t.statusBayar === 'Lunas' && !lunasHariIni;
+      if (lunasHariIni) {
         ctx.fillStyle = 'rgba(46,125,79,0.10)';
+        ctx.fillRect(20, y - rowH + 8, width - 40, rowH);
+      } else if (lunasHariLain) {
+        ctx.fillStyle = 'rgba(230,145,56,0.15)';
         ctx.fillRect(20, y - rowH + 8, width - 40, rowH);
       }
       ctx.fillStyle = '#222';
@@ -2288,7 +2302,7 @@ const app = {
 
     // Section MASUK (hijau muda)
     y = this._drawSectionHeader(ctx, width, y, '📥  LAPORAN MASUK LAUNDRY', '#dcefdf', '#1e5c33');
-    y = this._drawTrxTable(ctx, width, y, masuk);
+    y = this._drawTrxTable(ctx, width, y, masuk, tglStr);
     y += 8;
     y = this._drawBayarBreakdown(ctx, width, y, bayarMasuk);
     ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#1e5c33';
@@ -2297,7 +2311,7 @@ const app = {
 
     // Section KELUAR (biru muda)
     y = this._drawSectionHeader(ctx, width, y, '📤  LAPORAN KELUAR LAUNDRY', '#dbe9f7', '#1c4f7c');
-    y = this._drawTrxTable(ctx, width, y, keluar);
+    y = this._drawTrxTable(ctx, width, y, keluar, tglStr);
     y += 8;
     y = this._drawBayarBreakdown(ctx, width, y, bayarKeluar);
     ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#1c4f7c';
