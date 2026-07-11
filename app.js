@@ -1859,14 +1859,17 @@ const app = {
     const pengeluaran = pengAll.filter(p => fmtTglSingkat(p.tanggal) === tglStr);
     const bayarHariIni = trxAll.filter(t => t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr);
 
-    // "Jumlah Pemasukan"/"Jumlah Diambil" cuma hitung yang statusnya Lunas -
-    // yang Belum Bayar tetap ditampilkan terpisah di catatan merah, tidak ikut dijumlahkan ke angka utama.
-    const totalMasuk = masuk.filter(t => t.statusBayar === 'Lunas').reduce((a,b) => a + b.total, 0);
-    const totalKeluar = keluar.filter(t => t.statusBayar === 'Lunas').reduce((a,b) => a + b.total, 0);
+    // "Jumlah Pemasukan"/"Jumlah Diambil" cuma hitung transaksi yang LUNASNYA JUGA di hari itu
+    // (tglLunas = tglStr) - bukan cuma cek status Lunas sekarang. Ini penting supaya transaksi yang
+    // masuk hari ini tapi baru lunas beberapa hari kemudian TIDAK ikut kehitung di sini (dia akan
+    // kehitung di "Total Pembayaran Hari Ini" pada tanggal dia beneran lunas, bukan di sini).
+    const lunasHariIni = (t) => t.statusBayar === 'Lunas' && t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr;
+    const totalMasuk = masuk.filter(lunasHariIni).reduce((a,b) => a + b.total, 0);
+    const totalKeluar = keluar.filter(lunasHariIni).reduce((a,b) => a + b.total, 0);
     const totalPengeluaran = pengeluaran.reduce((a,b) => a + b.jumlah, 0);
     const totalBayarHariIni = bayarHariIni.reduce((a,b) => a + b.total, 0);
 
-    const breakdownBayar = (rows) => this._breakdownBayar(rows);
+    const breakdownBayar = (rows) => this._breakdownBayar(rows, tglStr);
     const bayarMasuk = breakdownBayar(masuk);
     const bayarKeluar = breakdownBayar(keluar);
     const breakdownPembayaranHariIni = { Tunai: 0, QRIS: 0, Transfer: 0, Lainnya: 0 };
@@ -1949,6 +1952,7 @@ const app = {
         </div>
       </div>
       ${b['Belum Bayar'] > 0 ? `<div style="text-align:center;margin-top:6px;font-size:11px;color:var(--danger);">Belum Bayar: ${fmtRupiah(b['Belum Bayar'])}</div>` : ''}
+      ${b['Lunas Hari Lain'] > 0 ? `<div style="text-align:center;margin-top:4px;font-size:10.5px;color:var(--info);">Lunas di hari lain (tidak dihitung di sini): ${fmtRupiah(b['Lunas Hari Lain'])}</div>` : ''}
       ${b.Lainnya > 0 ? `<div style="text-align:center;margin-top:4px;font-size:10.5px;color:#888;">Lainnya/tidak diketahui metode: ${fmtRupiah(b.Lainnya)}</div>` : ''}
     `;
   },
@@ -1992,7 +1996,8 @@ const app = {
         ${rows.map((t, i) => {
           const jenisSet = [...new Set(t.items.map(it => it.jenisCuci))].join('/');
           const levelSet = [...new Set(t.items.map(it => LEVEL_LABEL[it.level]))].join('/');
-          return `<tr>
+          const rowBg = t.statusBayar === 'Lunas' ? 'background:#e8f5ec;' : '';
+          return `<tr style="${rowBg}">
             <td style="padding:5px;border-top:1px solid var(--line);text-align:center;">${i+1}</td>
             <td style="padding:5px;border-top:1px solid var(--line);">${esc(t.nota)}</td>
             <td style="padding:5px;border-top:1px solid var(--line);">${esc(t.pelanggan.nama)}</td>
@@ -2009,18 +2014,21 @@ const app = {
 
   // Helper: gambar 1 section tabel (Masuk/Keluar/Pengeluaran) ke context canvas, mulai dari startY.
   // Mengembalikan Y akhir setelah section selesai digambar.
-  // Breakdown total per metode bayar untuk sekumpulan transaksi.
-  // Metode bayar yang gak dikenal (misal "Tidak diketahui" dari data import lama) masuk kategori Lainnya,
-  // supaya totalnya tetap konsisten/gak hilang diam-diam.
-  _breakdownBayar(rows) {
-    const b = { Tunai: 0, QRIS: 0, Transfer: 0, Lainnya: 0, 'Belum Bayar': 0 };
+  // Breakdown total per metode bayar untuk sekumpulan transaksi, KHUSUS yang lunasnya di tglStr.
+  // Transaksi yang lunas tapi di hari LAIN (bukan tglStr) masuk kategori 'Lunas Hari Lain' -
+  // supaya gak ketuker sama yang beneran 'Belum Bayar', dan supaya total gak dobel hitung antar hari.
+  _breakdownBayar(rows, tglStr) {
+    const b = { Tunai: 0, QRIS: 0, Transfer: 0, Lainnya: 0, 'Belum Bayar': 0, 'Lunas Hari Lain': 0 };
     rows.forEach(t => {
-      if (t.statusBayar === 'Lunas') {
+      const lunasHariIni = t.statusBayar === 'Lunas' && t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr;
+      if (lunasHariIni) {
         if (t.metodeBayar === 'Tunai' || t.metodeBayar === 'QRIS' || t.metodeBayar === 'Transfer') {
           b[t.metodeBayar] += t.total;
         } else {
           b.Lainnya += t.total;
         }
+      } else if (t.statusBayar === 'Lunas') {
+        b['Lunas Hari Lain'] += t.total;
       } else {
         b['Belum Bayar'] += t.total;
       }
@@ -2068,6 +2076,10 @@ const app = {
       const jenisSet = [...new Set(t.items.map(it => it.jenisCuci))].join('/');
       const levelSet = [...new Set(t.items.map(it => LEVEL_LABEL[it.level]))].join('/');
       const vals = [String(i+1), t.nota, t.pelanggan.nama, jenisSet, levelSet, fmtRupiah(t.total), this._bayarDisplayText(t)];
+      if (t.statusBayar === 'Lunas') {
+        ctx.fillStyle = 'rgba(46,125,79,0.10)';
+        ctx.fillRect(20, y - rowH + 8, width - 40, rowH);
+      }
       ctx.fillStyle = '#222';
       cols.forEach((c, ci) => {
         ctx.textAlign = c.align;
@@ -2102,6 +2114,11 @@ const app = {
       ctx.fillStyle = '#c0392b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText(`Belum Bayar: ${fmtRupiah(bayar['Belum Bayar'])}`, width/2, y);
       y += 20;
+    }
+    if (bayar['Lunas Hari Lain'] > 0) {
+      ctx.fillStyle = '#2e6f9e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(`Lunas di hari lain (tidak dihitung di sini): ${fmtRupiah(bayar['Lunas Hari Lain'])}`, width/2, y);
+      y += 18;
     }
     if (bayar.Lainnya > 0) {
       ctx.fillStyle = '#888'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
@@ -2210,12 +2227,13 @@ const app = {
     const pengeluaran = pengAll.filter(p => fmtTglSingkat(p.tanggal) === tglStr);
     const bayarHariIni = trxAll.filter(t => t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr);
 
-    const totalMasuk = masuk.filter(t => t.statusBayar === 'Lunas').reduce((a,b) => a + b.total, 0);
-    const totalKeluar = keluar.filter(t => t.statusBayar === 'Lunas').reduce((a,b) => a + b.total, 0);
+    const lunasHariIni = (t) => t.statusBayar === 'Lunas' && t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr;
+    const totalMasuk = masuk.filter(lunasHariIni).reduce((a,b) => a + b.total, 0);
+    const totalKeluar = keluar.filter(lunasHariIni).reduce((a,b) => a + b.total, 0);
     const totalPengeluaran = pengeluaran.reduce((a,b) => a + b.jumlah, 0);
     const totalBayarHariIni = bayarHariIni.reduce((a,b) => a + b.total, 0);
 
-    const breakdownBayar = (rows) => this._breakdownBayar(rows);
+    const breakdownBayar = (rows) => this._breakdownBayar(rows, tglStr);
     const bayarMasuk = breakdownBayar(masuk);
     const bayarKeluar = breakdownBayar(keluar);
     const breakdownPembayaranHariIni = { Tunai: 0, QRIS: 0, Transfer: 0, Lainnya: 0 };
