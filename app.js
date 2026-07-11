@@ -1857,28 +1857,23 @@ const app = {
     const masuk = trxAll.filter(t => fmtTglSingkat(t.tglMasuk) === tglStr);
     const keluar = trxAll.filter(t => t.tglDiambil && fmtTglSingkat(t.tglDiambil) === tglStr);
     const pengeluaran = pengAll.filter(p => fmtTglSingkat(p.tanggal) === tglStr);
-    // Transaksi yang PEMBAYARANNYA terjadi hari ini (bukan berdasar tglMasuk/tglDiambil) -
-    // ini yang jadi acuan "uang beneran diterima hari ini", menghindari dobel hitung
-    // (misal transaksi dibayar lunas 3 hari lalu lalu diambil hari ini, tidak dihitung lagi hari ini).
     const bayarHariIni = trxAll.filter(t => t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr);
 
-    const totalMasuk = masuk.reduce((a,b) => a + b.total, 0);
-    const totalKeluar = keluar.reduce((a,b) => a + b.total, 0);
+    // "Jumlah Pemasukan"/"Jumlah Diambil" cuma hitung yang statusnya Lunas -
+    // yang Belum Bayar tetap ditampilkan terpisah di catatan merah, tidak ikut dijumlahkan ke angka utama.
+    const totalMasuk = masuk.filter(t => t.statusBayar === 'Lunas').reduce((a,b) => a + b.total, 0);
+    const totalKeluar = keluar.filter(t => t.statusBayar === 'Lunas').reduce((a,b) => a + b.total, 0);
     const totalPengeluaran = pengeluaran.reduce((a,b) => a + b.jumlah, 0);
     const totalBayarHariIni = bayarHariIni.reduce((a,b) => a + b.total, 0);
 
-    const breakdownBayar = (rows) => {
-      const b = { Tunai: 0, QRIS: 0, Transfer: 0, 'Belum Bayar': 0 };
-      rows.forEach(t => {
-        if (t.statusBayar === 'Lunas' && t.metodeBayar) b[t.metodeBayar] += t.total;
-        else b['Belum Bayar'] += t.total;
-      });
-      return b;
-    };
+    const breakdownBayar = (rows) => this._breakdownBayar(rows);
     const bayarMasuk = breakdownBayar(masuk);
     const bayarKeluar = breakdownBayar(keluar);
-    const breakdownPembayaranHariIni = { Tunai: 0, QRIS: 0, Transfer: 0 };
-    bayarHariIni.forEach(t => { if (t.metodeBayar) breakdownPembayaranHariIni[t.metodeBayar] += t.total; });
+    const breakdownPembayaranHariIni = { Tunai: 0, QRIS: 0, Transfer: 0, Lainnya: 0 };
+    bayarHariIni.forEach(t => {
+      if (t.metodeBayar === 'Tunai' || t.metodeBayar === 'QRIS' || t.metodeBayar === 'Transfer') breakdownPembayaranHariIni[t.metodeBayar] += t.total;
+      else breakdownPembayaranHariIni.Lainnya += t.total;
+    });
 
     body.innerHTML = `
       <div class="card">
@@ -1901,20 +1896,21 @@ const app = {
             <div style="font-size:9.5px;color:#888;">TRANSFER</div><div style="font-weight:700;font-size:12.5px;">${fmtRupiah(breakdownPembayaranHariIni.Transfer)}</div>
           </div>
         </div>
+        ${breakdownPembayaranHariIni.Lainnya > 0 ? `<div style="text-align:center;margin-top:8px;font-size:11px;color:#888;">Lainnya/tidak diketahui metode: ${fmtRupiah(breakdownPembayaranHariIni.Lainnya)}</div>` : ''}
       </div>
 
       <div class="card">
         <h2>📥 Laporan Masuk Laundry — ${esc(fmtHari(this.parseInputDate(tglStr)))}, ${tglStr}</h2>
         ${this.renderLaporanTable(masuk, 'masuk')}
         ${this.renderBayarBreakdown(bayarMasuk)}
-        <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Pemasukan: ${fmtRupiah(totalMasuk)}</div>
+        <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Pemasukan (Lunas): ${fmtRupiah(totalMasuk)}</div>
       </div>
 
       <div class="card">
         <h2>📤 Laporan Keluar Laundry — ${esc(fmtHari(this.parseInputDate(tglStr)))}, ${tglStr}</h2>
         ${this.renderLaporanTable(keluar, 'keluar')}
         ${this.renderBayarBreakdown(bayarKeluar)}
-        <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Diambil: ${fmtRupiah(totalKeluar)}</div>
+        <div style="text-align:right;font-weight:800;margin-top:10px;font-size:15px;">Jumlah Diambil (Lunas): ${fmtRupiah(totalKeluar)}</div>
       </div>
 
       <div class="card">
@@ -1953,6 +1949,7 @@ const app = {
         </div>
       </div>
       ${b['Belum Bayar'] > 0 ? `<div style="text-align:center;margin-top:6px;font-size:11px;color:var(--danger);">Belum Bayar: ${fmtRupiah(b['Belum Bayar'])}</div>` : ''}
+      ${b.Lainnya > 0 ? `<div style="text-align:center;margin-top:4px;font-size:10.5px;color:#888;">Lainnya/tidak diketahui metode: ${fmtRupiah(b.Lainnya)}</div>` : ''}
     `;
   },
 
@@ -2012,6 +2009,25 @@ const app = {
 
   // Helper: gambar 1 section tabel (Masuk/Keluar/Pengeluaran) ke context canvas, mulai dari startY.
   // Mengembalikan Y akhir setelah section selesai digambar.
+  // Breakdown total per metode bayar untuk sekumpulan transaksi.
+  // Metode bayar yang gak dikenal (misal "Tidak diketahui" dari data import lama) masuk kategori Lainnya,
+  // supaya totalnya tetap konsisten/gak hilang diam-diam.
+  _breakdownBayar(rows) {
+    const b = { Tunai: 0, QRIS: 0, Transfer: 0, Lainnya: 0, 'Belum Bayar': 0 };
+    rows.forEach(t => {
+      if (t.statusBayar === 'Lunas') {
+        if (t.metodeBayar === 'Tunai' || t.metodeBayar === 'QRIS' || t.metodeBayar === 'Transfer') {
+          b[t.metodeBayar] += t.total;
+        } else {
+          b.Lainnya += t.total;
+        }
+      } else {
+        b['Belum Bayar'] += t.total;
+      }
+    });
+    return b;
+  },
+
   _drawSectionHeader(ctx, width, y, title, bgColor, textColor) {
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, y, width, 40);
@@ -2086,6 +2102,11 @@ const app = {
       ctx.fillStyle = '#c0392b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText(`Belum Bayar: ${fmtRupiah(bayar['Belum Bayar'])}`, width/2, y);
       y += 20;
+    }
+    if (bayar.Lainnya > 0) {
+      ctx.fillStyle = '#888'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(`Lainnya/tidak diketahui metode: ${fmtRupiah(bayar.Lainnya)}`, width/2, y);
+      y += 18;
     }
     return y;
   },
@@ -2189,23 +2210,19 @@ const app = {
     const pengeluaran = pengAll.filter(p => fmtTglSingkat(p.tanggal) === tglStr);
     const bayarHariIni = trxAll.filter(t => t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr);
 
-    const totalMasuk = masuk.reduce((a,b) => a + b.total, 0);
-    const totalKeluar = keluar.reduce((a,b) => a + b.total, 0);
+    const totalMasuk = masuk.filter(t => t.statusBayar === 'Lunas').reduce((a,b) => a + b.total, 0);
+    const totalKeluar = keluar.filter(t => t.statusBayar === 'Lunas').reduce((a,b) => a + b.total, 0);
     const totalPengeluaran = pengeluaran.reduce((a,b) => a + b.jumlah, 0);
     const totalBayarHariIni = bayarHariIni.reduce((a,b) => a + b.total, 0);
 
-    const breakdownBayar = (rows) => {
-      const b = { Tunai: 0, QRIS: 0, Transfer: 0, 'Belum Bayar': 0 };
-      rows.forEach(t => {
-        if (t.statusBayar === 'Lunas' && t.metodeBayar) b[t.metodeBayar] += t.total;
-        else b['Belum Bayar'] += t.total;
-      });
-      return b;
-    };
+    const breakdownBayar = (rows) => this._breakdownBayar(rows);
     const bayarMasuk = breakdownBayar(masuk);
     const bayarKeluar = breakdownBayar(keluar);
-    const breakdownPembayaranHariIni = { Tunai: 0, QRIS: 0, Transfer: 0 };
-    bayarHariIni.forEach(t => { if (t.metodeBayar) breakdownPembayaranHariIni[t.metodeBayar] += t.total; });
+    const breakdownPembayaranHariIni = { Tunai: 0, QRIS: 0, Transfer: 0, Lainnya: 0 };
+    bayarHariIni.forEach(t => {
+      if (t.metodeBayar === 'Tunai' || t.metodeBayar === 'QRIS' || t.metodeBayar === 'Transfer') breakdownPembayaranHariIni[t.metodeBayar] += t.total;
+      else breakdownPembayaranHariIni.Lainnya += t.total;
+    });
 
     const width = 780;
     // Estimasi tinggi total dulu (dry run sederhana): header + total bayar hari ini + 3 section + footer ttd
@@ -2257,7 +2274,7 @@ const app = {
     y += 8;
     y = this._drawBayarBreakdown(ctx, width, y, bayarMasuk);
     ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#1e5c33';
-    ctx.fillText(`Jumlah Pemasukan: ${fmtRupiah(totalMasuk)}`, width - 20, y + 6);
+    ctx.fillText(`Jumlah Pemasukan (Lunas): ${fmtRupiah(totalMasuk)}`, width - 20, y + 6);
     y += 36;
 
     // Section KELUAR (biru muda)
@@ -2266,7 +2283,7 @@ const app = {
     y += 8;
     y = this._drawBayarBreakdown(ctx, width, y, bayarKeluar);
     ctx.textAlign = 'right'; ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#1c4f7c';
-    ctx.fillText(`Jumlah Diambil: ${fmtRupiah(totalKeluar)}`, width - 20, y + 6);
+    ctx.fillText(`Jumlah Diambil (Lunas): ${fmtRupiah(totalKeluar)}`, width - 20, y + 6);
     y += 36;
 
     // Section PENGELUARAN (oranye muda)
