@@ -125,10 +125,25 @@ const app = {
   init() {
     const headerLogo = document.getElementById('headerLogo');
     if (headerLogo && typeof LOGO_SMALL_B64 !== 'undefined') headerLogo.src = LOGO_SMALL_B64;
+    this.migrateTglLunas();
     this.renderTabs();
     this.updateKasirBadge();
     this.updateWaktuBadge();
     this.renderTab();
+  },
+
+  // Migrasi satu kali: transaksi lama (termasuk hasil import Kasmini sebelum field tglLunas ada)
+  // yang statusnya Lunas tapi belum punya tglLunas, diisi otomatis pakai tanggal terbaik yang ada.
+  migrateTglLunas() {
+    const list = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
+    let changed = false;
+    list.forEach(t => {
+      if (t.statusBayar === 'Lunas' && !t.tglLunas) {
+        t.tglLunas = t.tglDiambil || t.tglMasuk;
+        changed = true;
+      }
+    });
+    if (changed) saveJSON(STORAGE_KEYS.TRANSAKSI, list);
   },
 
   renderTabs() {
