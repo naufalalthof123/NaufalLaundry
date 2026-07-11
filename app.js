@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
   PENGELUARAN: 'nl_pengeluaran',
   KASIR_LIST: 'nl_kasir_list',
   NOTA_COUNTER: 'nl_nota_counter',
+  NOTA_PERIOD: 'nl_nota_period',
   TIME_MODE: 'nl_time_mode', // 'otomatis' atau 'manual'
   TIME_MANUAL_TS: 'nl_time_manual_ts', // timestamp manual (ms) kalau mode manual
   TIME_MANUAL_SET_AT: 'nl_time_manual_set_at', // kapan manual ts itu di-set (buat hitung offset berjalan)
@@ -69,13 +70,23 @@ function esc(s) {
 }
 
 function nextNotaNumber() {
-  let counter = parseInt(localStorage.getItem(STORAGE_KEYS.NOTA_COUNTER) || '2999', 10);
+  const now = new Date();
+  const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const savedPeriod = localStorage.getItem(STORAGE_KEYS.NOTA_PERIOD);
+  let counter;
+  if (savedPeriod !== periodKey) {
+    // Bulan baru (atau pertama kali) -> reset counter dari 0
+    counter = 0;
+    localStorage.setItem(STORAGE_KEYS.NOTA_PERIOD, periodKey);
+  } else {
+    counter = parseInt(localStorage.getItem(STORAGE_KEYS.NOTA_COUNTER) || '0', 10);
+  }
   counter += 1;
   localStorage.setItem(STORAGE_KEYS.NOTA_COUNTER, String(counter));
   return counter;
 }
 function formatNota(counter) {
-  return `NL${counter}`;
+  return `NL${String(counter).padStart(4, '0')}`;
 }
 
 // ---------- STATE ----------
@@ -661,6 +672,8 @@ const app = {
       trx.total = grandTotal;
       trx.statusBayar = state.statusBayar;
       trx.metodeBayar = state.metodeBayar;
+      if (state.statusBayar === 'Lunas' && !trx.tglLunas) trx.tglLunas = nowTs();
+      if (state.statusBayar === 'Belum Bayar') trx.tglLunas = null;
       trx.kasir = state.currentKasir;
       saveJSON(STORAGE_KEYS.TRANSAKSI, list);
       this.upsertPelanggan(trx.pelanggan);
@@ -689,6 +702,7 @@ const app = {
         total: grandTotal,
         statusBayar: state.statusBayar,
         metodeBayar: state.metodeBayar,
+        tglLunas: state.statusBayar === 'Lunas' ? ts : null,
         statusPesanan: 'Diproses',
         tglDiambil: null,
       };
@@ -1205,7 +1219,9 @@ const app = {
   renderStatusTab(main) {
     const list = loadJSON(STORAGE_KEYS.TRANSAKSI, []).slice().reverse();
     const filter = state._statusFilter || 'AKTIF';
+    const q = (state._statusSearch || '').toLowerCase();
     const filtered = list.filter(t => {
+      if (q && !t.nota.toLowerCase().includes(q) && !t.pelanggan.nama.toLowerCase().includes(q)) return false;
       if (filter === 'AKTIF') return t.statusPesanan !== 'Sudah Diambil';
       if (filter === 'SEMUA') return true;
       return t.statusPesanan === filter;
@@ -1214,6 +1230,8 @@ const app = {
     main.innerHTML = `
       <div class="card">
         <h2>Status Pesanan</h2>
+        <input type="text" placeholder="Cari no. nota atau nama pelanggan..." value="${esc(state._statusSearch||'')}"
+          oninput="state._statusSearch=this.value; app.renderTab()" style="margin-bottom:10px;">
         <div class="chip-group">
           <div class="chip ${filter==='AKTIF'?'selected':''}" onclick="app.setStatusFilter('AKTIF')">Aktif</div>
           <div class="chip ${filter==='Diproses'?'selected':''}" onclick="app.setStatusFilter('Diproses')">Diproses</div>
@@ -1241,7 +1259,7 @@ const app = {
     const bayarClass = t.statusBayar === 'Lunas' ? 'bayar-lunas' : 'bayar-belum';
     return `
       <div class="transaksi-row">
-        <div class="transaksi-row-top">
+        <div class="transaksi-row-top" onclick="app.openEditTransaksi('${t.id}')" style="cursor:pointer;">
           <div>
             <div class="transaksi-nota">${esc(t.nota)} · ${esc(t.pelanggan.nama)}</div>
             <div class="transaksi-meta">Masuk ${fmtTglSingkat(t.tglMasuk)} · Est ${fmtTglSingkat(t.estSelesai)}</div>
@@ -1252,9 +1270,9 @@ const app = {
           <span class="status-badge ${statusClass}">${esc(t.statusPesanan)}</span>
           <span class="status-badge ${bayarClass}">${esc(t.statusBayar)}</span>
           <div style="margin-left:auto;display:flex;gap:6px;">
-            ${t.statusPesanan !== 'Siap Diambil' && t.statusPesanan !== 'Sudah Diambil' ? `<button class="btn btn-outline btn-sm" onclick="app.updateStatusPesanan('${t.id}','Siap Diambil')">Siap Diambil</button>` : ''}
-            ${t.statusPesanan !== 'Sudah Diambil' ? `<button class="btn btn-ok btn-sm" onclick="app.updateStatusPesanan('${t.id}','Sudah Diambil')">Sudah Diambil</button>` : ''}
-            ${t.statusBayar !== 'Lunas' ? `<button class="btn btn-gold btn-sm" onclick="app.lunaskanTransaksi('${t.id}')">Tandai Lunas</button>` : ''}
+            ${t.statusPesanan !== 'Siap Diambil' && t.statusPesanan !== 'Sudah Diambil' ? `<button class="btn btn-outline btn-sm" onclick="event.stopPropagation(); app.updateStatusPesanan('${t.id}','Siap Diambil')">Siap Diambil</button>` : ''}
+            ${t.statusPesanan !== 'Sudah Diambil' ? `<button class="btn btn-ok btn-sm" onclick="event.stopPropagation(); app.updateStatusPesanan('${t.id}','Sudah Diambil')">Sudah Diambil</button>` : ''}
+            ${t.statusBayar !== 'Lunas' ? `<button class="btn btn-gold btn-sm" onclick="event.stopPropagation(); app.lunaskanTransaksi('${t.id}')">Tandai Lunas</button>` : ''}
           </div>
         </div>
       </div>
@@ -1262,6 +1280,27 @@ const app = {
   },
 
   updateStatusPesanan(id, status) {
+    if (status === 'Siap Diambil') {
+      // Jangan langsung ubah status - tampilkan dulu popup notif WA,
+      // biar kalau kasir batal (silang), status tetap Diproses (tidak kepalang berubah)
+      const t = this.findTrx(id);
+      if (!t) return;
+      this.offerNotifSiapDiambil(t);
+      return;
+    }
+    if (status === 'Sudah Diambil') {
+      const t = this.findTrx(id);
+      if (!t) return;
+      if (t.statusBayar !== 'Lunas') {
+        // Wajib pilih metode bayar dulu sebelum status jadi Sudah Diambil
+        this.mintaBayarSebelumAmbil(id);
+        return;
+      }
+    }
+    this._setStatusPesanan(id, status);
+  },
+
+  _setStatusPesanan(id, status) {
     const list = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
     const t = list.find(x => x.id === id);
     if (!t) return;
@@ -1270,10 +1309,34 @@ const app = {
     saveJSON(STORAGE_KEYS.TRANSAKSI, list);
     this.renderTab();
     toast(`Status diubah: ${status}`);
+  },
 
-    if (status === 'Siap Diambil') {
-      this.offerNotifSiapDiambil(t);
-    }
+  mintaBayarSebelumAmbil(id) {
+    const t = this.findTrx(id);
+    if (!t) return;
+    const html = `
+      <div class="modal-header"><h3>Pilih Metode Bayar</h3><span class="modal-close" onclick="app.closeModal()">&times;</span></div>
+      <p style="font-size:13px;color:#555;">Transaksi <strong>${esc(t.nota)}</strong> masih <strong>Belum Bayar</strong>. Pilih metode bayar dulu sebelum ditandai Sudah Diambil.</p>
+      <div class="chip-group">
+        ${METODE_BAYAR.map(m => `<div class="chip" onclick="app.confirmLunasLaluAmbil('${id}','${m}')">${m}</div>`).join('')}
+      </div>
+    `;
+    this.openModal(html);
+  },
+
+  confirmLunasLaluAmbil(id, metode) {
+    const list = loadJSON(STORAGE_KEYS.TRANSAKSI, []);
+    const t = list.find(x => x.id === id);
+    if (!t) return;
+    t.statusBayar = 'Lunas';
+    t.metodeBayar = metode;
+    t.tglLunas = nowTs();
+    t.statusPesanan = 'Sudah Diambil';
+    t.tglDiambil = nowTs();
+    saveJSON(STORAGE_KEYS.TRANSAKSI, list);
+    this.closeModal();
+    this.renderTab();
+    toast('Lunas & ditandai Sudah Diambil');
   },
 
   offerNotifSiapDiambil(t) {
@@ -1282,11 +1345,17 @@ const app = {
       <p style="font-size:13px;color:#555;">Cucian <strong>${esc(t.nota)}</strong> milik <strong>${esc(t.pelanggan.nama)}</strong> sudah siap diambil. Kirim kabar via WhatsApp?</p>
       ${!t.pelanggan.telp ? '<p style="font-size:12px;color:var(--danger);">⚠️ Nomor telp pelanggan ini belum tersimpan, kamu perlu isi manual nanti di WhatsApp.</p>' : ''}
       <div class="row" style="margin-top:12px;">
-        <button class="btn btn-outline" onclick="app.closeModal()">Nanti Saja</button>
+        <button class="btn btn-outline" onclick="app.tundaNotifSiapDiambil('${t.id}')">Nanti Saja</button>
         <button class="btn btn-gold" onclick="app.kirimNotifSiapDiambil('${t.id}')">📱 Kirim WA</button>
       </div>
     `;
     this.openModal(html);
+  },
+
+  tundaNotifSiapDiambil(trxId) {
+    // Kasir sengaja skip kirim WA, tapi status pesanan tetap lanjut jadi Siap Diambil
+    this.closeModal();
+    this._setStatusPesanan(trxId, 'Siap Diambil');
   },
 
   kirimNotifSiapDiambil(trxId) {
@@ -1298,6 +1367,7 @@ const app = {
     const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(pesan)}`;
     window.open(waUrl, '_blank');
     this.closeModal();
+    this._setStatusPesanan(trxId, 'Siap Diambil');
   },
 
   lunaskanTransaksi(id) {
@@ -1316,6 +1386,7 @@ const app = {
     if (!t) return;
     t.statusBayar = 'Lunas';
     t.metodeBayar = metode;
+    t.tglLunas = nowTs();
     saveJSON(STORAGE_KEYS.TRANSAKSI, list);
     this.closeModal();
     this.renderTab();
@@ -1771,10 +1842,15 @@ const app = {
     const masuk = trxAll.filter(t => fmtTglSingkat(t.tglMasuk) === tglStr);
     const keluar = trxAll.filter(t => t.tglDiambil && fmtTglSingkat(t.tglDiambil) === tglStr);
     const pengeluaran = pengAll.filter(p => fmtTglSingkat(p.tanggal) === tglStr);
+    // Transaksi yang PEMBAYARANNYA terjadi hari ini (bukan berdasar tglMasuk/tglDiambil) -
+    // ini yang jadi acuan "uang beneran diterima hari ini", menghindari dobel hitung
+    // (misal transaksi dibayar lunas 3 hari lalu lalu diambil hari ini, tidak dihitung lagi hari ini).
+    const bayarHariIni = trxAll.filter(t => t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr);
 
     const totalMasuk = masuk.reduce((a,b) => a + b.total, 0);
     const totalKeluar = keluar.reduce((a,b) => a + b.total, 0);
     const totalPengeluaran = pengeluaran.reduce((a,b) => a + b.jumlah, 0);
+    const totalBayarHariIni = bayarHariIni.reduce((a,b) => a + b.total, 0);
 
     const breakdownBayar = (rows) => {
       const b = { Tunai: 0, QRIS: 0, Transfer: 0, 'Belum Bayar': 0 };
@@ -1786,11 +1862,30 @@ const app = {
     };
     const bayarMasuk = breakdownBayar(masuk);
     const bayarKeluar = breakdownBayar(keluar);
+    const breakdownPembayaranHariIni = { Tunai: 0, QRIS: 0, Transfer: 0 };
+    bayarHariIni.forEach(t => { if (t.metodeBayar) breakdownPembayaranHariIni[t.metodeBayar] += t.total; });
 
     body.innerHTML = `
       <div class="card">
         <label>Pilih Tanggal</label>
         <input type="date" id="laporanTglInput" value="${this.toInputDate(tglStr)}" onchange="app.setLaporanTgl(this.value)">
+      </div>
+
+      <div class="card" style="background:#f5eee0;border-color:var(--gold);">
+        <h2>💰 Total Pembayaran Hari Ini</h2>
+        <p style="font-size:11px;color:#777;margin-top:0;">Uang yang beneran diterima hari ini (termasuk pembayaran dari order sebelumnya yang baru lunas hari ini), berapapun tanggal order masuk/diambilnya.</p>
+        <div style="font-size:24px;font-weight:800;color:var(--gold);margin:8px 0;">${fmtRupiah(totalBayarHariIni)}</div>
+        <div class="grid3">
+          <div style="text-align:center;padding:8px 4px;background:#fff;border-radius:6px;">
+            <div style="font-size:9.5px;color:#888;">TUNAI</div><div style="font-weight:700;font-size:12.5px;">${fmtRupiah(breakdownPembayaranHariIni.Tunai)}</div>
+          </div>
+          <div style="text-align:center;padding:8px 4px;background:#fff;border-radius:6px;">
+            <div style="font-size:9.5px;color:#888;">QRIS</div><div style="font-weight:700;font-size:12.5px;">${fmtRupiah(breakdownPembayaranHariIni.QRIS)}</div>
+          </div>
+          <div style="text-align:center;padding:8px 4px;background:#fff;border-radius:6px;">
+            <div style="font-size:9.5px;color:#888;">TRANSFER</div><div style="font-weight:700;font-size:12.5px;">${fmtRupiah(breakdownPembayaranHariIni.Transfer)}</div>
+          </div>
+        </div>
       </div>
 
       <div class="card">
@@ -1822,7 +1917,7 @@ const app = {
         <div class="grid3">
           <div style="text-align:center;"><div style="font-size:10px;color:#888;">MASUK</div><div style="font-weight:800;">${fmtRupiah(totalMasuk)}</div></div>
           <div style="text-align:center;"><div style="font-size:10px;color:#888;">KELUAR</div><div style="font-weight:800;">${fmtRupiah(totalKeluar)}</div></div>
-          <div style="text-align:center;"><div style="font-size:10px;color:#888;">NET</div><div style="font-weight:800;color:${(totalMasuk-totalPengeluaran)>=0?'var(--ok)':'var(--danger)'};">${fmtRupiah(totalMasuk-totalPengeluaran)}</div></div>
+          <div style="text-align:center;"><div style="font-size:10px;color:#888;">NET</div><div style="font-weight:800;color:${(totalBayarHariIni-totalPengeluaran)>=0?'var(--ok)':'var(--danger)'};">${fmtRupiah(totalBayarHariIni-totalPengeluaran)}</div></div>
         </div>
         <button class="btn btn-gold btn-block" style="margin-top:12px;" onclick="app.downloadLaporanHarianPDF('${tglStr}')">📄 Export Laporan Harian (PDF)</button>
       </div>
@@ -2064,10 +2159,12 @@ const app = {
     const masuk = trxAll.filter(t => fmtTglSingkat(t.tglMasuk) === tglStr);
     const keluar = trxAll.filter(t => t.tglDiambil && fmtTglSingkat(t.tglDiambil) === tglStr);
     const pengeluaran = pengAll.filter(p => fmtTglSingkat(p.tanggal) === tglStr);
+    const bayarHariIni = trxAll.filter(t => t.tglLunas && fmtTglSingkat(t.tglLunas) === tglStr);
 
     const totalMasuk = masuk.reduce((a,b) => a + b.total, 0);
     const totalKeluar = keluar.reduce((a,b) => a + b.total, 0);
     const totalPengeluaran = pengeluaran.reduce((a,b) => a + b.jumlah, 0);
+    const totalBayarHariIni = bayarHariIni.reduce((a,b) => a + b.total, 0);
 
     const breakdownBayar = (rows) => {
       const b = { Tunai: 0, QRIS: 0, Transfer: 0, 'Belum Bayar': 0 };
@@ -2079,16 +2176,19 @@ const app = {
     };
     const bayarMasuk = breakdownBayar(masuk);
     const bayarKeluar = breakdownBayar(keluar);
+    const breakdownPembayaranHariIni = { Tunai: 0, QRIS: 0, Transfer: 0 };
+    bayarHariIni.forEach(t => { if (t.metodeBayar) breakdownPembayaranHariIni[t.metodeBayar] += t.total; });
 
     const width = 780;
-    // Estimasi tinggi total dulu (dry run sederhana): header + 3 section + footer ttd
+    // Estimasi tinggi total dulu (dry run sederhana): header + total bayar hari ini + 3 section + footer ttd
     const rowH = 24;
+    const estTotalBayarH = 100;
     const estMasukH = 40+14 + 23+rowH + Math.max(masuk.length,1)*rowH + 50 + 45;
     const estKeluarH = 40+14 + 23+rowH + Math.max(keluar.length,1)*rowH + 50 + 45;
     const estPengH = 40+14 + 23+rowH + Math.max(pengeluaran.length,1)*rowH + 45;
     const headerH = 100;
     const footerH = 170; // ringkasan + ttd
-    const totalHeight = headerH + estMasukH + estKeluarH + estPengH + footerH + 40;
+    const totalHeight = headerH + estTotalBayarH + estMasukH + estKeluarH + estPengH + footerH + 40;
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -2115,6 +2215,13 @@ const app = {
     ctx.fillText(`${fmtHari(this.parseInputDate(tglStr))}, ${tglStr}`, width - 20, y + 44);
     ctx.fillText('Naufal Laundry', width - 20, y + 60);
     y = headerH;
+
+    // Section TOTAL PEMBAYARAN HARI INI (gold/kuning)
+    y = this._drawSectionHeader(ctx, width, y, '💰  TOTAL PEMBAYARAN HARI INI', '#f5eee0', '#8a6d1e');
+    y = this._drawBayarBreakdown(ctx, width, y, { ...breakdownPembayaranHariIni, 'Belum Bayar': 0 });
+    ctx.textAlign = 'right'; ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = '#8a6d1e';
+    ctx.fillText(`Total: ${fmtRupiah(totalBayarHariIni)}`, width - 20, y + 6);
+    y += 36;
 
     // Section MASUK (hijau muda)
     y = this._drawSectionHeader(ctx, width, y, '📥  LAPORAN MASUK LAUNDRY', '#dcefdf', '#1e5c33');
@@ -2171,7 +2278,7 @@ const app = {
     ctx.strokeStyle = '#ccc'; ctx.beginPath(); ctx.moveTo(20, y); ctx.lineTo(width-20, y); ctx.stroke();
     y += 26;
     ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#1a1a1a';
-    ctx.fillText(`Net (Masuk - Pengeluaran): ${fmtRupiah(totalMasuk - totalPengeluaran)}`, 20, y);
+    ctx.fillText(`Net (Total Pembayaran - Pengeluaran): ${fmtRupiah(totalBayarHariIni - totalPengeluaran)}`, 20, y);
     y += 40;
 
     // Tanda tangan
