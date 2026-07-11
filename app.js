@@ -1955,6 +1955,19 @@ const app = {
     this.renderTab();
   },
 
+  // Format tampilan status bayar: "Lunas (DD/MM)" kalau ada tanggal lunas, atau "Belum Bayar"
+  _bayarDisplayText(t) {
+    if (t.statusBayar === 'Lunas') {
+      if (t.tglLunas) {
+        const d = new Date(t.tglLunas);
+        const pad = (x) => String(x).padStart(2, '0');
+        return `Lunas (${pad(d.getDate())}/${pad(d.getMonth()+1)})`;
+      }
+      return 'Lunas';
+    }
+    return 'Belum Bayar';
+  },
+
   renderLaporanTable(rows, kind) {
     if (rows.length === 0) return `<div class="empty-state">Tidak ada transaksi.</div>`;
     return `
@@ -1974,7 +1987,7 @@ const app = {
             <td style="padding:5px;border-top:1px solid var(--line);text-align:center;">${jenisSet}</td>
             <td style="padding:5px;border-top:1px solid var(--line);text-align:center;">${levelSet}</td>
             <td style="padding:5px;border-top:1px solid var(--line);text-align:right;">${fmtRupiah(t.total)}</td>
-            <td style="padding:5px;border-top:1px solid var(--line);text-align:center;">${t.statusBayar==='Lunas' ? '✓ '+esc(t.metodeBayar||'') : '✗'}</td>
+            <td style="padding:5px;border-top:1px solid var(--line);text-align:center;">${t.statusBayar==='Lunas' ? '✓ ' : '✗ '}${esc(this._bayarDisplayText(t))}</td>
           </tr>`;
         }).join('')}
       </table>
@@ -2023,7 +2036,7 @@ const app = {
       x = 20;
       const jenisSet = [...new Set(t.items.map(it => it.jenisCuci))].join('/');
       const levelSet = [...new Set(t.items.map(it => LEVEL_LABEL[it.level]))].join('/');
-      const vals = [String(i+1), t.nota, t.pelanggan.nama, jenisSet, levelSet, fmtRupiah(t.total), t.statusBayar==='Lunas'?(t.metodeBayar||'Lunas'):'Belum'];
+      const vals = [String(i+1), t.nota, t.pelanggan.nama, jenisSet, levelSet, fmtRupiah(t.total), this._bayarDisplayText(t)];
       ctx.fillStyle = '#222';
       cols.forEach((c, ci) => {
         ctx.textAlign = c.align;
